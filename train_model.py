@@ -8,7 +8,7 @@ import joblib
 from queuequest_meta import ATTRACTION_METADATA
 
 # --- CONFIGURATIE ---
-INPUT_FILE = "mock_data.csv"
+INPUT_FILE = "real_data.csv"
 MODEL_FILE = "queuequest_model.pkl"
 
 def prepare_data(df):

@@ -1,146 +1,108 @@
 import streamlit as st
 import datetime
 import pandas as pd
-import plotly.express as px # Voor mooie grafiekjes
-from route_solver import solve_route, get_wait_time_prediction
+import requests
+from route_solver import solve_route_with_priorities, fetch_live_data
 from queuequest_meta import ATTRACTION_METADATA
 
-# Pagina Config
-st.set_page_config(page_title="QueueQuest", page_icon="🎢", layout="wide")
+st.set_page_config(page_title="QueueQuest Live", page_icon="🎢", layout="wide")
 
-# Titel
-col1, col2 = st.columns([1, 4])
-with col1:
-    st.write("## 🎢")
-with col2:
-    st.title("QueueQuest AI")
-    st.caption("De slimste route door Efteling, Phantasialand & Walibi")
+# Titel en Intro
+st.title("🎢 QueueQuest Live Co-Pilot")
+st.caption("Real-time optimalisatie met prioriteiten en live data.")
 
 # --- SIDEBAR ---
 st.sidebar.header("⚙️ Instellingen")
+park_keuze = st.sidebar.selectbox("Kies Park:", ("EFTELING", "PHANTASIALAND", "WALIBI_BELGIUM"))
 
-# Park Selectie
-park_keuze = st.sidebar.selectbox(
-    "Kies je Park:",
-    ("EFTELING", "PHANTASIALAND", "WALIBI_BELGIUM")
-)
+# Data voorbereiden
+alle_rides = sorted([n for n, m in ATTRACTION_METADATA.items() if m['park'] == park_keuze])
 
-# Attracties ophalen uit metadata op basis van park
-alle_attracties = [name for name, meta in ATTRACTION_METADATA.items() if meta['park'] == park_keuze]
-selected_rides = st.sidebar.multiselect(
-    "Selecteer je 'Must-Do' attracties:",
-    options=sorted(alle_attracties),
-    default=sorted(alle_attracties)[:5]
-)
+# 1. Live Status Check (Vooraf!)
+if 'live_data' not in st.session_state or st.sidebar.button("🔄 Ververs Live Data"):
+    with st.spinner("Verbinding met park..."):
+        st.session_state['live_data'] = fetch_live_data(park_keuze)
 
-# Tijden
-col_t1, col_t2 = st.sidebar.columns(2)
-start_time = col_t1.time_input("Aankomst", datetime.time(10, 0))
-end_time = col_t2.time_input("Vertrek", datetime.time(18, 0))
+live_data = st.session_state.get('live_data', {})
 
-# --- HOOFDPAGINA ---
+# Toon live storingen direct in sidebar
+closed_now = [name for name, data in live_data.items() if not data['is_open'] and name in alle_rides]
+if closed_now:
+    st.sidebar.error(f"⚠️ Nu Gesloten: {', '.join(closed_now)}")
 
-if st.sidebar.button("🚀 Bereken Optimale Route", type="primary"):
-    if not selected_rides:
-        st.error("Kies ten minste één attractie!")
+# 2. Prioriteiten Selectie
+st.sidebar.subheader("1. Must Haves (Hoge Prio)")
+must_haves = st.sidebar.multiselect("Welke wil je ABSOLUUT doen?", alle_rides)
+
+remaining = [r for r in alle_rides if r not in must_haves]
+st.sidebar.subheader("2. Should Haves (Opvulling)")
+should_haves = st.sidebar.multiselect("Welke wil je doen als het uitkomt?", remaining)
+
+# 3. Tijden
+col1, col2 = st.sidebar.columns(2)
+start_time = col1.time_input("Starttijd", datetime.datetime.now().time())
+end_time = col2.time_input("Eindtijd", datetime.time(18, 0))
+
+# --- HOOFDSCHERM ---
+
+if st.button("🚀 Bereken Slimme Route", type="primary"):
+    if not must_haves and not should_haves:
+        st.warning("Kies ten minste één attractie.")
     else:
         start_str = start_time.strftime("%H:%M")
         end_str = end_time.strftime("%H:%M")
-
-        # 1. De AI laten rekenen
-        with st.spinner('🤖 AI is aan het puzzelen... (Weer checken, Drukte voorspellen, Looproutes berekenen)'):
-            route, total_wait, total_walk = solve_route(park_keuze, selected_rides, start_str, end_str)
-
-        # 2. Resultaten tonen
-        st.divider()
         
-        # Scorekaart
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Aantal Attracties", len(selected_rides))
-        m2.metric("Totale Wachttijd", f"{total_wait} min")
-        m3.metric("Totale Wandeltijd", f"{total_walk} min")
-
-        # Tabs voor weergave
-        tab_route, tab_flex, tab_chart = st.tabs(["📍 Jouw Route", "🕒 Flexibele Tijden", "📈 Drukte Grafiek"])
-
-        with tab_route:
-            if not route:
-                st.warning("Geen route mogelijk binnen deze tijd!")
-            else:
-                # Mooie tijdlijn weergave
-                timeline_data = []
-                for step in route:
-                    # Loopstukje
-                    timeline_data.append({
-                        "Tijd": step['start_walk'],
-                        "Activiteit": f"🚶 Loop naar {step['ride']}",
-                        "Duur": f"{step['walk_min']} min",
-                        "Type": "Lopen"
-                    })
-                    # Wachtstukje
-                    note = f" ({step['note']})" if "Optimale" in step['note'] else ""
-                    timeline_data.append({
-                        "Tijd": step['arrival_time'],
-                        "Activiteit": f"⏳ Wachten voor {step['ride']}",
-                        "Duur": f"{step['wait_min']} min{note}",
-                        "Type": "Wachten"
-                    })
-                    # Ritstukje
-                    timeline_data.append({
-                        "Tijd": step['ride_start'],
-                        "Activiteit": f"🎢 {step['ride']}!",
-                        "Duur": f"Tot {step['ride_end']}",
-                        "Type": "Pret"
-                    })
-                
-                st.dataframe(
-                    pd.DataFrame(timeline_data), 
-                    column_config={
-                        "Type": st.column_config.TextColumn("Type", width="small"),
-                    },
-                    use_container_width=True, 
-                    hide_index=True
-                )
-
-        with tab_flex:
-            st.info("Wil je afwijken? Hier zie je per attractie wanneer de rij het kortst is.")
+        with st.spinner("AI is aan het puzzelen..."):
+            route, closed, skipped = solve_route_with_priorities(
+                park_keuze, must_haves, should_haves, start_str, end_str
+            )
+        
+        # Resultaten
+        st.subheader("📍 Jouw Optimale Route")
+        
+        if closed:
+            st.warning(f"🚫 Deze attracties zijn gesloten en uit de route gehaald: {', '.join(closed)}")
+        
+        if route:
+            timeline = []
+            tot_wait = 0
+            tot_walk = 0
             
-            flex_data = []
-            scan_range = range(start_time.hour, end_time.hour + 1)
-            now_date = datetime.datetime.now()
-            
-            for ride in selected_rides:
-                min_w = 999
-                best_h = -1
-                
-                for h in scan_range:
-                    test_t = now_date.replace(hour=h, minute=0, second=0)
-                    w = get_wait_time_prediction(park_keuze, ride, test_t)
-                    if w < min_w:
-                        min_w = w
-                        best_h = h
-                
-                flex_data.append({
-                    "Attractie": ride,
-                    "Beste Tijd": f"{best_h}:00",
-                    "Verwachte Wachttijd": f"{min_w} min"
+            for step in route:
+                icon = "⭐" if step['type'] == "MUST" else "🔹"
+                timeline.append({
+                    "Tijd": step['start_walk'],
+                    "Activiteit": f"🚶 Loop naar {step['ride']}",
+                    "Duur": f"{step['walk_min']} min",
+                    "Prio": ""
                 })
-            
-            st.dataframe(pd.DataFrame(flex_data), hide_index=True, use_container_width=True)
+                timeline.append({
+                    "Tijd": step['arrival_time'],
+                    "Activiteit": f"⏳ Wachten voor {step['ride']}",
+                    "Duur": f"{step['wait_min']} min",
+                    "Prio": step['note']
+                })
+                timeline.append({
+                    "Tijd": step['ride_start'],
+                    "Activiteit": f"🎢 {icon} {step['ride']}",
+                    "Duur": f"Tot {step['ride_end']}",
+                    "Prio": step['type']
+                })
+                tot_wait += step['wait_min']
+                tot_walk += step['walk_min']
 
-        with tab_chart:
-            st.caption("Verwachte drukte verloop voor jouw gekozen attracties")
+            # Scorebord
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Attracties", len(route))
+            c2.metric("Wachttijd", f"{tot_wait} min")
+            c3.metric("Wandeltijd", f"{tot_walk} min")
             
-            chart_data = []
-            for h in range(start_time.hour, end_time.hour + 1):
-                t = now_date.replace(hour=h, minute=0, second=0)
-                for ride in selected_rides:
-                    w = get_wait_time_prediction(park_keuze, ride, t)
-                    chart_data.append({"Uur": f"{h}:00", "Attractie": ride, "Wachttijd": w})
+            st.dataframe(pd.DataFrame(timeline), use_container_width=True, hide_index=True)
             
-            df_chart = pd.DataFrame(chart_data)
-            fig = px.line(df_chart, x="Uur", y="Wachttijd", color="Attractie", markers=True)
-            st.plotly_chart(fig, use_container_width=True)
+            if skipped:
+                st.info(f"💡 Overgeslagen (wegens tijd/drukte): {', '.join(skipped)}")
+        else:
+            st.error("Geen route mogelijk binnen deze tijd!")
 
 else:
-    st.info("👈 Selecteer je attracties in de zijbalk om te beginnen.")
+    st.info("👈 Selecteer je prioriteiten links en druk op de knop.")

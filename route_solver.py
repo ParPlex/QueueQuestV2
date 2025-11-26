@@ -2,12 +2,20 @@ import joblib
 import pandas as pd
 import numpy as np
 import datetime
+import requests
 from queuequest_meta import ATTRACTION_METADATA
 from holiday_utils import is_crowd_risk_day
 from distance_utils import get_travel_time
 
-# --- CONFIGURATIE & MODEL LADEN ---
+# --- CONFIGURATIE ---
 MODEL_FILE = "queuequest_model.pkl"
+
+# Park ID's voor de Live API
+PARK_IDS = {
+    "EFTELING": 160,
+    "PHANTASIALAND": 56,
+    "WALIBI_BELGIUM": 14
+}
 
 print(f"⚙️ Model laden uit '{MODEL_FILE}'...")
 try:
@@ -18,31 +26,69 @@ try:
     print("✅ Model succesvol geladen!")
 except FileNotFoundError:
     print(f"❌ FOUT: Kan '{MODEL_FILE}' niet vinden.")
-    exit()
+    MODEL = None
 
 # ==============================================================================
-# DEEL 1: VOORSPEL LOGICA (AI)
+# 1. LIVE DATA FUNCTIES
 # ==============================================================================
 
-def get_wait_time_prediction(park_name, ride_name, query_time):
+def fetch_live_data(park_name):
     """
-    Voorspelt de wachttijd voor één enkele attractie op één moment.
+    Haalt actuele wachttijden en OPEN/DICHT status op.
     """
-    is_holiday = is_crowd_risk_day(query_time)
-    meta = ATTRACTION_METADATA.get(ride_name, {})
+    park_id = PARK_IDS.get(park_name)
+    if not park_id: return {}
     
-    if meta.get('park') != park_name: return 999
+    url = f"https://queue-times.com/parks/{park_id}/queue_times.json"
+    try:
+        resp = requests.get(url, timeout=5)
+        if resp.status_code != 200: return {}
+        
+        data = resp.json()
+        live_status = {}
+        
+        for land in data.get('lands', []):
+            for ride in land.get('rides', []):
+                # We slaan op: Is hij open? En wat is de wachttijd NU?
+                live_status[ride['name']] = {
+                    "is_open": ride['is_open'],
+                    "wait_time": ride['wait_time']
+                }
+        return live_status
+    except Exception as e:
+        print(f"⚠️ Kon live data niet ophalen: {e}")
+        return {}
 
-    # Input rij maken
+# ==============================================================================
+# 2. VOORSPEL LOGICA
+# ==============================================================================
+
+def get_wait_time_prediction(park_name, ride_name, query_time, live_data_snapshot=None):
+    """
+    Geeft voorspelling. Als query_time = NU is, gebruiken we live data (indien beschikbaar).
+    """
+    # 1. Check Live Data Override (Als we binnen 30 min van nu kijken)
+    now = datetime.datetime.now()
+    minutes_diff = (query_time - now).total_seconds() / 60
+    
+    if live_data_snapshot and 0 <= minutes_diff < 30:
+        if ride_name in live_data_snapshot:
+            stat = live_data_snapshot[ride_name]
+            if not stat['is_open']: return 999 # Dicht = Oneindig wachten
+            return stat['wait_time']
+
+    # 2. Anders: ML Model Voorspelling
+    meta = ATTRACTION_METADATA.get(ride_name, {})
+    if meta.get('park') != park_name: return 0
+
+    # Input voor model bouwen
     row = pd.DataFrame([{
         'attraction_name': ride_name,
         'park_name': park_name,
-        'temp_c': 15.0,        
-        'precip_mm': 0.0,      
-        'weather_condition': 'Cloudy', 
+        'temp_c': 15.0, 'precip_mm': 0.0, 'weather_condition': 'Cloudy', # Fictief weer
         'day_of_week': query_time.isoweekday(),
         'hour_of_day': query_time.hour,
-        'is_holiday': is_holiday,
+        'is_holiday': is_crowd_risk_day(query_time),
         'type': meta.get('type', 'Unknown'),
         'zone': meta.get('zone', 'Unknown'),
         'capacity': meta.get('capacity', 0),
@@ -53,163 +99,127 @@ def get_wait_time_prediction(park_name, ride_name, query_time):
         'day_cos': np.cos(2 * np.pi * query_time.isoweekday() / 7)
     }])
 
-    # Encoden
     try:
-        def safe_transform(encoder, col_name):
-            return row[col_name].map(lambda x: encoder.transform([x])[0] if x in encoder.classes_ else 0)
-
-        row['park_encoded'] = safe_transform(ENCODERS['park'], 'park_name')
-        row['ride_encoded'] = safe_transform(ENCODERS['ride'], 'attraction_name')
-        row['type_encoded'] = safe_transform(ENCODERS['type'], 'type')
-        row['weather_encoded'] = safe_transform(ENCODERS['weather'], 'weather_condition')
+        # Encoders toepassen
+        def safe_enc(enc, col):
+            return row[col].map(lambda x: enc.transform([x])[0] if x in enc.classes_ else 0)
         
-        # Voorspellen
-        X = row[FEATURES]
-        pred = MODEL.predict(X)[0]
+        row['park_encoded'] = safe_enc(ENCODERS['park'], 'park_name')
+        row['ride_encoded'] = safe_enc(ENCODERS['ride'], 'attraction_name')
+        row['type_encoded'] = safe_enc(ENCODERS['type'], 'type')
+        row['weather_encoded'] = safe_enc(ENCODERS['weather'], 'weather_condition')
+        
+        pred = MODEL.predict(row[FEATURES])[0]
         return int(5 * round(max(0, pred) / 5))
-    except Exception:
-        return 0
+    except:
+        return 15 # Fallback
 
 # ==============================================================================
-# DEEL 2: SLIMME DAGPLANNER LOGICA
+# 3. DE SOLVER (Met Prioriteiten)
 # ==============================================================================
 
-def get_best_future_wait(park_name, ride, current_time, end_time):
-    """
-    Scant de toekomst (tot sluitingstijd) om te zien wat de LAAGST mogelijke wachttijd is.
-    """
-    min_wait = 999
-    check_time = current_time
-    
-    # Check elk half uur tot sluitingstijd
-    while check_time < end_time:
-        wait = get_wait_time_prediction(park_name, ride, check_time)
-        if wait < min_wait:
-            min_wait = wait
-        check_time += datetime.timedelta(minutes=30)
-        
-    return min_wait
+def format_time(dt): return dt.strftime('%H:%M')
 
-def format_time(dt):
-    return dt.strftime('%H:%M')
-
-def solve_route(park_name, wishlist, start_time_str="10:00", park_close_str="18:00"):
+def solve_route_with_priorities(park_name, must_haves, should_haves, start_str, end_str):
     # Tijd setup
     now = datetime.datetime.now()
-    sh, sm = map(int, start_time_str.split(':'))
-    eh, em = map(int, park_close_str.split(':'))
+    sh, sm = map(int, start_str.split(':'))
+    eh, em = map(int, end_str.split(':'))
+    current_time = now.replace(hour=sh, minute=sm, second=0)
+    park_close = now.replace(hour=eh, minute=em, second=0)
+    if current_time < now: current_time += datetime.timedelta(days=1); park_close += datetime.timedelta(days=1)
+
+    # 1. Haal Live Status op
+    live_data = fetch_live_data(park_name)
     
-    current_time = now.replace(hour=sh, minute=sm, second=0, microsecond=0)
-    park_close_time = now.replace(hour=eh, minute=em, second=0, microsecond=0)
+    # 2. Filter gesloten attracties en bouw werklijst
+    active_must = []
+    active_should = []
+    closed_rides = []
+
+    for ride in must_haves + should_haves:
+        # Check live status
+        if ride in live_data and not live_data[ride]['is_open']:
+            closed_rides.append(ride)
+            continue
+            
+        if ride in must_haves: active_must.append(ride)
+        else: active_should.append(ride)
+
+    # Alles in één lijst, maar we onthouden de priority
+    unvisited = active_must + active_should
     
-    if current_time < now: 
-        current_time += datetime.timedelta(days=1)
-        park_close_time += datetime.timedelta(days=1)
-        
-    unvisited = wishlist.copy()
-    
-    # Startlocatie
+    # Startpunt
     current_location = "Unknown"
     if park_name == "EFTELING": current_location = "Piraña"
     elif park_name == "PHANTASIALAND": current_location = "Maus au Chocolat"
     elif park_name == "WALIBI_BELGIUM": current_location = "Loup-Garou"
 
     itinerary = []
-    total_wait = 0
-    total_walk = 0
-
-    print(f"\n🚀 Start Dagplanning voor {park_name}")
-    print(f"🕒 Tijdvak: {format_time(current_time)} - {format_time(park_close_time)}")
-    print(f"🎯 Doelen: {', '.join(unvisited)}\n")
+    skipped_shoulds = [] # Should-haves die niet pasten/te druk waren
 
     while unvisited:
-        # Check of we nog tijd hebben
-        if current_time >= park_close_time:
-            print("⚠️ WAARSCHUWING: Park gaat dicht, niet alles gelukt!")
-            break
+        if current_time >= park_close: break
 
         best_candidate = None
-        best_score = float('inf') # Lagere score is beter
+        best_score = float('inf')
         best_details = {}
 
-        # We evalueren elke kandidaat op basis van een Slimme Score
+        # Beoordeel elke optie
         for ride in unvisited:
-            # 1. Reistijd & Aankomst
             walk_time = get_travel_time(current_location, ride)
             arrival_time = current_time + datetime.timedelta(minutes=walk_time)
             
-            # 2. Wachttijd NU (bij aankomst)
-            wait_now = get_wait_time_prediction(park_name, ride, arrival_time)
-            
-            # 3. Wachttijd LATER (beste moment in de rest van de dag)
-            # We kijken alleen in de toekomst als er nog meer dan 2 uur over is
-            time_left = (park_close_time - arrival_time).total_seconds() / 3600
-            
-            regret_penalty = 0
-            if time_left > 1.5: 
-                best_future_wait = get_best_future_wait(park_name, ride, arrival_time, park_close_time)
-                
-                # Als het nu veel drukker is dan het beste moment, krijg je strafpunten
-                diff = wait_now - best_future_wait
-                if diff > 5: # Alleen boeien als het verschil > 5 min is
-                    regret_penalty = diff * 2.5 # Factor 2.5: Wachten 'voelt' zwaarder dan lopen
-            
-            # 4. Score Berekening
-            # Score = (Lopen) + (Wachten Nu) + (Spijt dat je niet wacht)
-            score = walk_time + wait_now + regret_penalty
-            
-            # Debug printje (kun je aanzetten om te zien hoe hij denkt)
-            # print(f"   Optie {ride}: Walk {walk_time} + Wait {wait_now} + Regret {regret_penalty} = Score {score}")
+            if arrival_time >= park_close: continue # Haalt sluitingstijd niet
 
-            if score < best_score:
-                best_score = score
+            # Voorspelling (Gebruikt live data indien dichtbij in tijd)
+            wait_now = get_wait_time_prediction(park_name, ride, arrival_time, live_data)
+            
+            # SCORE BEREKENING
+            # Basis: Hoeveel tijd kost dit mij?
+            cost = walk_time + wait_now
+            
+            # Penalty voor Should-Haves
+            # We doen ze alleen als ze 'goedkoop' zijn. Anders bewaren we tijd voor Must-Haves.
+            if ride in active_should:
+                cost *= 1.5 # Should-haves zijn 50% 'duurder' in de weging
+            
+            # Bonus voor Must-Haves die nu rustig zijn
+            if ride in active_must and wait_now < 15:
+                cost *= 0.8 
+
+            if cost < best_score:
+                best_score = cost
                 best_candidate = ride
                 best_details = {"walk": walk_time, "wait": wait_now, "arrival": arrival_time}
 
-        # --- De Beste Keuze is Gemaakt ---
-        ride = best_candidate
-        
+        if not best_candidate:
+            break # Geen haalbare attracties meer
+
         # Uitvoeren
+        ride = best_candidate
         meta = ATTRACTION_METADATA.get(ride, {})
         duration = meta.get('duration_min', 5)
-        
-        total_walk += best_details['walk']
-        total_wait += best_details['wait']
         
         finish_time = best_details['arrival'] + datetime.timedelta(minutes=best_details['wait'] + duration)
         
         itinerary.append({
             "ride": ride,
+            "type": "MUST" if ride in active_must else "SHOULD",
             "start_walk": format_time(current_time),
             "walk_min": best_details['walk'],
             "arrival_time": format_time(best_details['arrival']),
             "wait_min": best_details['wait'],
             "ride_start": format_time(best_details['arrival'] + datetime.timedelta(minutes=best_details['wait'])),
             "ride_end": format_time(finish_time),
-            "note": "✅ Optimale tijd!" if best_details['wait'] <= 15 else "⚠️ Druk, maar beste optie"
+            "note": "⚡ Live Data" if (ride in live_data and abs((current_time - datetime.datetime.now()).total_seconds()) < 3600) else "🔮 Voorspelling"
         })
         
         current_time = finish_time
         current_location = ride
         unvisited.remove(ride)
 
-    return itinerary, total_wait, total_walk
+    # Wie hebben we overgeslagen?
+    not_visited = unvisited # Wat overblijft in de lijst is niet gelukt
 
-# --- TESTEN ---
-if __name__ == "__main__":
-    wishlist = ["Baron 1898", "Symbolica", "Python", "Droomvlucht", "Vogel Rok", "Joris en de Draak", "Carnaval Festival"]
-    park = "EFTELING"
-    
-    route, tot_wait, tot_walk = solve_route(park, wishlist, "10:00", "19:00")
-    
-    print("-" * 95)
-    print(f"{'TIJD':<8} | {'ACTIVITEIT':<30} | {'DETAILS':<25} | {'OPMERKING'}")
-    print("-" * 95)
-    
-    for step in route:
-        print(f"{step['start_walk']:<8} | 🚶 Loop naar {step['ride']:<20} | {step['walk_min']} min lopen           |")
-        print(f"{step['arrival_time']:<8} | ⏳ Wachtrij {step['ride']:<20} | {step['wait_min']} min wachten         | {step['note']}")
-        print(f"{step['ride_start']:<8} | 🎢 Ritje in {step['ride']:<20} | Tot {step['ride_end']}             |")
-        print("-" * 95)
-        
-    print(f"\n✅ Dagplanning compleet! Totaal {tot_wait} min gewacht, {tot_walk} min gelopen.")
+    return itinerary, closed_rides, not_visited
