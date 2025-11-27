@@ -3,6 +3,13 @@ import datetime
 import pandas as pd
 import plotly.express as px
 import numpy as np
+import importlib
+
+# Forceer reload van route_solver om zeker te zijn dat de nieuwe functies er zijn
+import route_solver
+importlib.reload(route_solver)
+
+# Nu importeren we de functies uit de ververste module
 from route_solver import solve_route_with_priorities, fetch_live_data, get_wait_time_prediction, solve_naive_route
 from queuequest_meta import ATTRACTION_METADATA
 from holiday_utils import is_crowd_risk_day
