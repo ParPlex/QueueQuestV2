@@ -15,6 +15,61 @@ from holiday_utils import is_crowd_risk_day
 
 st.set_page_config(page_title="QueueQuest Pro", page_icon="🎢", layout="wide")
 
+# --- VISUELE MAGIE (CSS INJECTIE) ---
+# Dit forceert het Neon thema, ongeacht de server instellingen
+st.markdown("""
+    <style>
+    /* Hoofdachtergrond: Donker Antraciet */
+    .stApp {
+        background-color: #1A1A2E;
+        color: #FFFFFF;
+    }
+    
+    /* Sidebar Achtergrond: Nog donkerder */
+    section[data-testid="stSidebar"] {
+        background-color: #11111E;
+    }
+    
+    /* Knoppen: Electric Blue */
+    div.stButton > button {
+        background-color: #00A8E8 !important;
+        color: white !important;
+        border-radius: 8px;
+        border: none;
+        font-weight: bold;
+    }
+    div.stButton > button:hover {
+        background-color: #0084B8 !important;
+        border: 1px solid #39FF14 !important;
+    }
+
+    /* Selectboxen en Inputs */
+    .stSelectbox, .stMultiSelect, .stDateInput, .stTimeInput {
+        color: white;
+    }
+    
+    /* Titels en Headers: Neon Lime & Blue */
+    h1 {
+        color: #39FF14 !important; /* Neon Groen */
+        text-shadow: 0 0 10px rgba(57, 255, 20, 0.5);
+    }
+    h2, h3 {
+        color: #00A8E8 !important; /* Neon Blauw */
+    }
+    
+    /* Metrics (Cijfers) */
+    [data-testid="stMetricValue"] {
+        color: #39FF14 !important;
+    }
+    
+    /* Tabel headers */
+    th {
+        background-color: #005F73 !important;
+        color: white !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
 # --- APP GEHEUGEN ---
 if 'completed' not in st.session_state: st.session_state.completed = []
 if 'current_loc' not in st.session_state: st.session_state.current_loc = "Ingang"
@@ -46,7 +101,6 @@ if start_loc_select != st.session_state.current_loc:
 
 # 2. Selectie
 st.sidebar.subheader("🎯 Jouw Wensenlijst")
-# We gebruiken session_state om de selecties te beheren (zodat we ze kunnen wissen bij 'Gedaan')
 must_haves = st.sidebar.multiselect("Must-Haves", rides, key="must_haves_list")
 remaining = [r for r in rides if r not in must_haves]
 should_haves = st.sidebar.multiselect("Opvulling", remaining, key="should_haves_list")
@@ -75,22 +129,6 @@ with tab_copilot:
     start_t = c1.time_input("Tijd Nu", datetime.datetime.now().time())
     end_t = c2.time_input("Einde Dag", datetime.time(18, 0))
     
-    # Helper functies voor display
-    def get_crowd_level(ride_name, wait_time):
-        meta = ATTRACTION_METADATA.get(ride_name, {})
-        cap = meta.get('capacity', 1000)
-        if wait_time <= 5: return "🟢 Walk-on"
-        if wait_time <= 15: return "🟢 Rustig"
-        if cap > 1500: return "🔴 Erg Druk" if wait_time > 45 else "🟠 Normaal"
-        else: return "🔴 Capaciteit?" if wait_time > 30 else "🟠 Normaal"
-
-    def check_sr(ride_name, current_wait):
-        sr_name = f"{ride_name} Single-rider"
-        if sr_name in live_data and live_data[sr_name]['is_open']:
-            diff = current_wait - live_data[sr_name]['wait_time']
-            if diff > 10: return f"💡 SR bespaart {diff} min!"
-        return None
-
     if st.button("🚀 Bereken Route vanaf Huidige Locatie", type="primary"):
         if not must_haves and not should_haves:
             st.warning("Kies eerst attracties in de zijbalk.")
@@ -139,10 +177,16 @@ with tab_copilot:
             "Wachttijd": [ai_wait, n_wait],
             "Wandeltijd": [ai_walk, n_walk]
         })
+        # UPDATE: Kleuren hardcoded voor donkere achtergrond
         fig = px.bar(comp_data, x="Strategie", y=["Wachttijd", "Wandeltijd"], 
                      title="Tijdsbesteding Vergelijking", 
                      color_discrete_map={"Wachttijd": "#D400FF", "Wandeltijd": "#39FF14"})
-        fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"))
+        fig.update_layout(
+            plot_bgcolor="rgba(0,0,0,0)", 
+            paper_bgcolor="rgba(0,0,0,0)", 
+            font=dict(color="white"),
+            title_font=dict(color="#00A8E8")
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("👇 Jouw Actieplan")
@@ -171,7 +215,6 @@ with tab_copilot:
                     st.session_state.completed.append(ride_done)
                     st.session_state.current_loc = ride_done
                     
-                    # Verwijder uit selecties (dit werkt nu!)
                     if ride_done in st.session_state.must_haves_list:
                         st.session_state.must_haves_list.remove(ride_done)
                     if ride_done in st.session_state.should_haves_list:
@@ -215,7 +258,7 @@ with tab_best_times:
         st.dataframe(pd.DataFrame(scan_data), use_container_width=True, hide_index=True)
 
 # ==============================================================================
-# TAB 3: TOEKOMST
+# TAB 3: PLAN JE BEZOEK (TOEKOMST)
 # ==============================================================================
 with tab_future:
     st.subheader("🔮 Voorspel de toekomst")
