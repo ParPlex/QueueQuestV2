@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.express as px
 import numpy as np
 import importlib
+import pytz
 
 # Forceer reload van route_solver bij elke interactie
 import route_solver
@@ -62,12 +63,19 @@ for k, v in defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
 # Tijd State
+# Tijd State
 if 'start_time_val' not in st.session_state:
-    now = datetime.datetime.now()
+    # --- NIEUWE CODE START ---
+    # Forceer de tijdzone naar Brussel/Amsterdam
+    tz = pytz.timezone('Europe/Brussels')
+    now = datetime.datetime.now(tz)
+    
+    # Als het voor 10:00 is, zet start op 10:00, anders huidige tijd
     st.session_state.start_time_val = datetime.time(10, 0) if now.hour < 10 else now.time()
+    # --- NIEUWE CODE EINDE ---
+
 if 'end_time_val' not in st.session_state:
     st.session_state.end_time_val = datetime.time(18, 0)
-
 # --- CALLBACKS ---
 def update_start_time(): st.session_state.start_time_val = st.session_state.widget_start_time
 def update_end_time(): st.session_state.end_time_val = st.session_state.widget_end_time
@@ -386,3 +394,4 @@ with tab_done:
     else:
 
         st.info("Nog niks gedaan.")
+
