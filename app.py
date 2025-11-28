@@ -229,6 +229,7 @@ with tab_copilot:
         st.success("🎉 Alles gedaan!")
 
 # TAB 2: BESTE TIJDEN
+# TAB 2: BESTE TIJDEN
 with tab_best:
     st.subheader("🔍 Zoek het beste moment (Vandaag)")
     target = active_selection
@@ -236,25 +237,42 @@ with tab_best:
         s_range = st.slider("Zoekvenster:", 10, 19, (12, 16))
         now = datetime.datetime.now()
         cols = st.columns(3)
+        
         for i, ride in enumerate(target):
             best_h, min_w = -1, 999
-            for h in range(s_range[0], s_range[1]):
+            
+            # FIX: We voegen +1 toe aan s_range[1]
+            # Hierdoor werkt range(16, 17) correct voor het uur 16:00
+            start_h = s_range[0]
+            end_h = s_range[1] + 1 
+
+            for h in range(start_h, end_h):
                 t = now.replace(hour=h, minute=0)
                 w = get_wait_time_prediction(park_keuze, ride, t, live_data)
-                if isinstance(w, dict): w=15
-                if w < min_w: min_w, best_h = w, h
+                
+                # Fallback check
+                if isinstance(w, dict): w = 15
+                
+                # Update beste tijd als deze wachttijd lager is
+                if w < min_w: 
+                    min_w, best_h = w, h
             
-            border_c = "#39FF14" if min_w < 15 else ("#FFC107" if min_w < 45 else "#FF4B4B")
-            html = f"""
-            <div class="advice-card" style="border-left: 5px solid {border_c};">
-                <div class="advice-title">{ride}</div>
-                <div class="advice-time">Om {best_h}:00</div>
-                <div class="advice-wait">⏳ Verwacht: {min_w} min</div>
-            </div>
-            """
-            with cols[i % 3]: st.markdown(html, unsafe_allow_html=True)
+            # Check of er een geldige tijd is gevonden (voorkomt -1 weergave)
+            if best_h != -1:
+                border_c = "#39FF14" if min_w < 15 else ("#FFC107" if min_w < 45 else "#FF4B4B")
+                html = f"""
+                <div class="advice-card" style="border-left: 5px solid {border_c};">
+                    <div class="advice-title">{ride}</div>
+                    <div class="advice-time">Om {best_h}:00</div>
+                    <div class="advice-wait">⏳ Verwacht: {min_w} min</div>
+                </div>
+                """
+                with cols[i % 3]: st.markdown(html, unsafe_allow_html=True)
+            else:
+                # Fallback als er iets misgaat met de range
+                st.warning(f"Geen data voor {ride}")
+                
     else: st.info("Kies eerst attracties.")
-
 # TAB 3: TOEKOMST
 with tab_future:
     st.subheader("🔮 Precisie Simulatie")
@@ -366,4 +384,5 @@ with tab_done:
             for k in st.session_state.keys(): del st.session_state[k]
             st.rerun()
     else:
+
         st.info("Nog niks gedaan.")
