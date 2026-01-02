@@ -10,9 +10,18 @@ import pytz
 import route_solver
 importlib.reload(route_solver)
 
-from route_solver import solve_route_with_priorities, fetch_live_data, get_wait_time_prediction
+# Importeer BEIDE solvers
+from route_solver import solve_route_with_priorities, solve_max_score_route, fetch_live_data, get_wait_time_prediction
 from queuequest_meta import ATTRACTION_METADATA
 from holiday_utils import is_crowd_risk_day
+
+# Probeer weather_utils te laden (zodat het script niet crasht als het bestand mist)
+try:
+    from weather_utils import get_automated_weather
+except ImportError:
+    # Fallback functie als het bestand er niet is
+    def get_automated_weather(park, date):
+        return {"temp_c": 15, "precip_mm": 0.0, "rain_prob": 10, "source": "⚠️ Fallback"}
 
 st.set_page_config(page_title="QueueQuest Pro", page_icon="🎢", layout="wide")
 
@@ -46,8 +55,9 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCTIES VOOR UITLEG EN STRATEGIE ---
+# --- FUNCTIES VOOR UITLEG EN STRATEGIE (GEOPTIMALISEERD MET CACHE) ---
 
+@st.cache_data(show_spinner=False)
 def generate_strategy_explanation(route, park_name):
     """Genereert een logische verklaring voor de gekozen route."""
     if not route: return None, None
@@ -84,14 +94,20 @@ def get_step_reason(step, prev_step_loc, park_name, live_data):
     Bepaalt de reden en berekent 'Opportunity Cost' (Winst t.o.v. later gaan).
     """
     ride = step['ride']
-    wait_now = step['wait_min']
-    walk = step['walk_min']
+    
+    # Check voor Score Modus (heeft geen wait_min direct beschikbaar in alle gevallen)
+    wait_now = step.get('wait_min', 0)
+    walk = step.get('walk_min', 0)
     
     # 1. Is het een Lunch?
     if step['type'] == 'LUNCH':
         return "🍽️ Tijd om even op te laden."
+    
+    # 2. Is het een Score Run?
+    if step['type'] == 'SCORE':
+        return "💎 **Punten Pakker:** Deze attractie levert nu de meeste waarde (plezier/tijd) op."
 
-    # 2. TOEKOMST ANALYSE
+    # 3. TOEKOMST ANALYSE
     try:
         tz = pytz.timezone('Europe/Brussels')
         now = datetime.datetime.now(tz)
@@ -155,11 +171,18 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
-# Tijd State (Timezone Aware)
+# --- 2. INTELLIGENTE TIJD INITIALISATIE ---
 if 'start_time_val' not in st.session_state:
     tz = pytz.timezone('Europe/Brussels')
     now = datetime.datetime.now(tz)
-    st.session_state.start_time_val = datetime.time(10, 0) if now.hour < 10 else now.time()
+    
+    # Check: Is het tussen 10:00 en 18:00?
+    if 10 <= now.hour < 18:
+        # Ja: Pak huidige tijd
+        st.session_state.start_time_val = now.time().replace(second=0, microsecond=0)
+    else:
+        # Nee: Pak 10:00
+        st.session_state.start_time_val = datetime.time(10, 0)
 
 if 'end_time_val' not in st.session_state:
     st.session_state.end_time_val = datetime.time(18, 0)
@@ -193,6 +216,17 @@ loc_options = ["Ingang"] + rides_all + restaurants
 if st.session_state.current_loc not in loc_options: st.session_state.current_loc = "Ingang"
 st.sidebar.selectbox("Je bent nu bij:", loc_options, key="current_loc")
 
+# --- NIEUW: HET LOOP-PROFIEL (SLIDER) ---
+st.sidebar.subheader("🏃 Wandeltempo")
+pace_select = st.sidebar.select_slider(
+    "Hoe snel loop je?",
+    options=["Relaxed 🐢", "Gemiddeld 🚶", "Haastig 🐇"],
+    value="Gemiddeld 🚶"
+)
+# Vertaal selectie naar factor (1.0 = normaal, >1 = trager, <1 = sneller)
+pace_map = {"Relaxed 🐢": 1.4, "Gemiddeld 🚶": 1.0, "Haastig 🐇": 0.7}
+pace_factor = pace_map[pace_select]
+
 # --- SELECTIE ---
 st.sidebar.subheader("🎯 Wensenlijst")
 keys_to_clean = ['mc', 'sc', 'md', 'sd', 'mo', 'so']
@@ -219,6 +253,7 @@ with st.sidebar.expander("🎡 Overige"):
     remain_o = [r for r in others if r not in st.session_state.mo]
     st.multiselect("Opvulling", remain_o, key="so")
 
+# --- AGGREGATIE (DE FIX) ---
 must_haves = st.session_state.mc + st.session_state.md + st.session_state.mo
 should_haves = st.session_state.sc + st.session_state.sd + st.session_state.so
 
@@ -235,8 +270,10 @@ with st.sidebar.expander("🍔 Lunch Pauze"):
         lunch_config = None
         if st.session_state.lunch_done: st.sidebar.success("Lunch gehad! ✅")
 
-# Live data knop
+# Live data knop (AANGEPAST VOOR CACHING)
 if st.sidebar.button("🔄 Ververs Live Data"):
+    # HIER LEGEN WE DE CACHE OM EEN ECHTE REFRESH TE FORCEREN
+    st.cache_data.clear()
     with st.spinner("Verbinden met park servers..."):
         st.session_state.live_data = fetch_live_data(park_keuze)
 live_data = st.session_state.get('live_data', {})
@@ -249,7 +286,6 @@ if not is_park_closed and live_data:
 elif is_park_closed: st.sidebar.info("ℹ️ Park gesloten (Forecast Modus)")
 
 # --- WAIT OR GO ADVISEUR (SIDEBAR) ---
-# DIT STUK MOET STRAK LINKS STAAN
 if not is_park_closed and active_selection:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧠 Wait or Go?")
@@ -290,8 +326,15 @@ if not is_park_closed and active_selection:
             st.sidebar.info("Geen sterke stijgers of dalers voorspeld.")
 
 
-# --- TABS ---
-tab_copilot, tab_radar, tab_best, tab_future, tab_done = st.tabs(["📍 Live Route", "⚡ Radar", "📊 Beste Tijden", "📅 Toekomst", "✅ Voltooid"])
+# --- TABS (HERINGEDEELD) ---
+tab_copilot, tab_radar, tab_best, tab_future, tab_perfect, tab_done = st.tabs([
+    "📍 Live Route", 
+    "⚡ Radar", 
+    "📊 Beste Tijden", 
+    "📅 Toekomst", 
+    "🏆 Perfecte Route", 
+    "✅ Voltooid"
+])
 
 # TAB 1: CO-PILOOT
 with tab_copilot:
@@ -299,18 +342,23 @@ with tab_copilot:
     c1.time_input("Starttijd", value=st.session_state.start_time_val, key="widget_start_time", on_change=update_start_time)
     c2.time_input("Eindtijd", value=st.session_state.end_time_val, key="widget_end_time", on_change=update_end_time)
     
-    if st.button("🚀 Bereken Route", type="primary"):
+    if st.button("🚀 Bereken Route", type="primary", use_container_width=True):
         if not active_selection and not lunch_config:
-            st.warning("Kies eerst attracties.")
+            st.warning("Kies eerst attracties in de zijbalk.")
         else:
             with st.spinner("AI berekent route..."):
                 s_str = st.session_state.start_time_val.strftime("%H:%M")
                 e_str = st.session_state.end_time_val.strftime("%H:%M")
                 
                 route, closed, skipped = solve_route_with_priorities(
-                    park_keuze, must_haves, should_haves, s_str, e_str, 
+                    park_name=park_keuze,
+                    must_haves=must_haves,
+                    should_haves=should_haves,
+                    start_str=s_str,
+                    end_str=e_str, 
                     start_location=st.session_state.current_loc,
-                    lunch_config=lunch_config
+                    lunch_config=lunch_config,
+                    pace_factor=pace_factor 
                 )
                 st.session_state.last_route = route
                 st.session_state.last_closed = closed
@@ -320,7 +368,6 @@ with tab_copilot:
         if st.session_state.last_closed and not is_park_closed: 
             st.error(f"⛔ Gesloten: {', '.join(st.session_state.last_closed)}")
 
-        # --- AI STRATEGIE UITLEG ---
         strat_title, strat_msg = generate_strategy_explanation(route, park_keuze)
         if strat_title:
             st.info(f"**{strat_title}**\n\n{strat_msg}", icon="🧠")
@@ -333,12 +380,10 @@ with tab_copilot:
         m3.metric("Volgende", route[0]['ride'] if route else "Klaar")
 
         st.subheader("👇 Jouw Planning")
-        
         prev_loc = st.session_state.current_loc 
 
         for i, step in enumerate(route):
             is_next = (i == 0)
-            
             icon = "🎢"
             if step['type'] == "LUNCH": icon = "🍔"
             elif "Coaster" in ATTRACTION_METADATA.get(step['ride'], {}).get('type', ''): icon = "🎢"
@@ -349,8 +394,6 @@ with tab_copilot:
 
             with st.expander(label, expanded=is_next):
                 c1, c2, c3 = st.columns([2,2,1])
-                
-                # --- SLIMME REDEN AANROEPEN ---
                 reason_msg = get_step_reason(step, prev_loc, park_keuze, live_data)
                 
                 if step['type'] == "LUNCH":
@@ -366,57 +409,64 @@ with tab_copilot:
                 else:
                     c1.write(f"🚶 Loop: {step['walk_min']} min")
                     c1.write(f"⏳ Wacht: {step['wait_min']} min")
-                    
                     source_label = "Live Data" if "Live" in step['note'] else "Forecast"
                     prio_label = " | ⭐ Must-Do" if step['type'] == "MUST" else ""
-                    
                     c2.info(f"{reason_msg}\n\n*({source_label}{prio_label})*")
-                    
                     c3.button("✅ Gedaan!", key=f"done_{step['ride']}_{i}", on_click=mark_done, args=(step['ride'],))
-            
             prev_loc = step['ride']
 
     elif st.session_state.last_route == []:
-        st.success("🎉 Alles gedaan!")
+        if st.session_state.last_closed:
+            st.error("⛔ Geen route mogelijk: Al je gekozen attracties zijn gesloten!")
+            st.write("De volgende attracties zijn dicht:")
+            for c in st.session_state.last_closed:
+                st.write(f"- 🔴 {c}")
+        elif not active_selection:
+            st.warning("👈 Selecteer eerst attracties in de zijbalk.")
+        else:
+            st.success("🎉 Alles gedaan! Je hebt je hele lijst afgewerkt.")
 
-# TAB 2: MARKET ANALYSIS (RADAR)
+# TAB 2: MARKET ANALYSIS (MARKET WATCH)
 with tab_radar:
-    st.subheader("📉 Markt Analyse: Waar zit de winst?")
+    st.subheader("📉 Market Watch: Kansen & Valkuilen")
     
-    # --- DE BENCHMARK SCHAKELAAR ---
-    c_mode, c_info = st.columns([1, 2])
-    benchmark_mode = c_mode.radio(
-        "Vergelijk met:", 
-        ["🤖 AI Verwachting (Vandaag)", "📊 Jaargemiddelde (Statisch)"],
-        help="AI kijkt naar de voorspelling voor vandaag (weer/dag). Jaargemiddelde is een vast getal."
-    )
+    # --- 1. CONFIGURATIE & FILTERS ---
+    c_filters, c_info = st.columns([2, 2])
     
+    with c_filters:
+        benchmark_mode = st.radio(
+            "Vergelijk met:", 
+            ["🤖 AI Verwachting (Vandaag)", "📊 Jaargemiddelde"],
+            horizontal=True,
+            label_visibility="collapsed"
+        )
+        score_filter = st.select_slider(
+            "Filter op Kwaliteit:",
+            options=["Alles", "Vanaf 6 (Goed)", "8+ (Alleen Toppers)"],
+            value="Alles"
+        )
+
     if benchmark_mode.startswith("🤖"):
-        c_info.info("💡 Je vergelijkt nu met wat het model **voor vandaag** had voorspeld. Als het groen is, is het dus rustiger dan verwacht voor deze specifieke dag.")
+        c_info.info("💡 **AI Modus:** Vergelijkt live drukte met de voorspelling voor *vandaag*.")
     else:
-        c_info.info("💡 Je vergelijkt nu met het **gemiddelde over het hele jaar**. Op rustige dagen zal alles groen lijken.")
+        c_info.info("💡 **Historisch:** Vergelijkt live drukte met het *gemiddelde* van het jaar.")
 
     st.divider()
 
     if not live_data:
         st.warning("Geen live data beschikbaar. Druk op '🔄 Ververs Live Data' in de sidebar.")
     else:
-        # 'Normale' wachttijden
         historical_averages = {
-            "Baron 1898": 40, "Python": 25, "Vliegende Hollander": 40,
+            "Baron 1898": 40, "Python": 25, "Vliegende Hollander": 35,
             "Joris en de Draak": 35, "Droomvlucht": 35, "Symbolica": 35,
             "Vogel Rok": 15, "Fata Morgana": 15, "Piraña": 20,
-            "Max & Moritz": 20, "Sprookjesbos": 5, "Carnaval Festival": 20,
-            "Danse Macabre": 60,
-            "Taron": 65, "Black Mamba": 30, "F.L.Y.": 75, "Chiapas": 35,
+            "Max & Moritz": 20, "Carnaval Festival": 20, "Danse Macabre": 60,
+            "Taron": 60, "Black Mamba": 30, "F.L.Y.": 70, "Chiapas": 30,
             "Maus au Chocolat": 30, "Winja's Fear": 25, "Winja's Force": 25,
-            "Crazy Bats": 10, "Colorado Adventure": 20, "Mystery Castle": 15,
-            "River Quest": 45, "Talocan": 15,
-            "Kondaa": 55, "Pulsar": 25, "Tiki-Waka": 35, "Werewolf": 30,
-            "Psyké Underground": 25, "Cobra": 25, "Vampire": 30
+            "Kondaa": 50, "Pulsar": 25, "Tiki-Waka": 30, "Psyké Underground": 25
         }
 
-        radar_data = []
+        market_data = []
         tz = pytz.timezone('Europe/Brussels')
         now_radar = datetime.datetime.now(tz)
 
@@ -424,142 +474,324 @@ with tab_radar:
             if not data['is_open']: continue
 
             curr_wait = data['wait_time']
+            meta = ATTRACTION_METADATA.get(ride_name, {})
+            score = meta.get('score', 5)
             
+            if score_filter == "Vanaf 6 (Goed)" and score < 6: continue
+            if score_filter == "8+ (Alleen Toppers)" and score < 8: continue
+
             if "AI" in benchmark_mode:
                 predicted = get_wait_time_prediction(park_keuze, ride_name, now_radar, live_data_snapshot=None)
-                if isinstance(predicted, dict): predicted = 15
+                if isinstance(predicted, dict): predicted = 20
                 norm_wait = predicted
             else:
                 norm_wait = historical_averages.get(ride_name, curr_wait) 
             
             diff = norm_wait - curr_wait 
             
-            status = "Fair Value"
-            if diff >= 15: status = "🔥 STRONG BUY"
-            elif diff >= 5: status = "🟢 Buy"
-            elif diff <= -15: status = "⛔ SELL / AVOID"
-            elif diff <= -5: status = "🔴 Overpriced"
-            
-            radar_data.append({
-                "Attractie": ride_name,
-                "Nu": curr_wait,
-                "Benchmark": norm_wait, 
-                "Winst": diff,
-                "Status": status
-            })
+            if norm_wait > 5 or curr_wait > 5:
+                market_data.append({
+                    "Attractie": ride_name,
+                    "Nu": curr_wait,
+                    "Normaal": norm_wait, 
+                    "Winst": diff,
+                    "Score": score
+                })
         
-        df_radar = pd.DataFrame(radar_data)
-        
-        if not df_radar.empty:
-            df_radar = df_radar.sort_values(by="Winst", ascending=False)
-            top_picks = df_radar.head(3)
-            col_label = "AI Verwacht" if "AI" in benchmark_mode else "Jaar Gem."
-            
-            st.markdown(f"### 🏆 Top 3 'Outperformers' (vs {col_label})")
-            cols = st.columns(3)
-            for i, (index, row) in enumerate(top_picks.iterrows()):
-                label_color = "normal"
-                if row['Winst'] > 0: label_color = "normal"
-                elif row['Winst'] < 0: label_color = "inverse"
+        df_market = pd.DataFrame(market_data)
 
-                cols[i].metric(
-                    label=row['Attractie'],
-                    value=f"{row['Nu']} min",
-                    delta=f"{row['Winst']} min (Sneller)",
-                    delta_color=label_color
-                )
+        if not df_market.empty:
+            st.markdown("### 🎯 Opportunity Matrix")
+            fig = px.scatter(
+                df_market,
+                x="Normaal",
+                y="Winst",
+                color="Winst",
+                size="Score", 
+                text="Attractie",
+                color_continuous_scale="RdYlGn", 
+                range_color=[-20, 20],
+                labels={"Normaal": "Normale Drukte", "Winst": "Minuten Sneller"},
+                height=450
+            )
+            
+            fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Gemiddeld")
+            fig.update_traces(textposition='top center', marker=dict(line=dict(width=1, color='DarkSlateGrey')))
+            fig.update_layout(
+                plot_bgcolor="rgba(0,0,0,0)", 
+                paper_bgcolor="rgba(0,0,0,0)", 
+                font=dict(color="white"),
+                showlegend=False
+            )
+            st.plotly_chart(fig, use_container_width=True) # FIX: width="stretch" indien nodig, maar use_container_width is veilige fallback voor oudere versies
+            
+            st.caption(f"Leeswijzer: Rechtsboven zijn de toppers die nu rustig zijn. (Filter actief: {score_filter})")
 
             st.divider()
 
-            st.markdown("### 📋 Volledig Marktoverzicht")
+            c_win, c_loss = st.columns(2)
             
-            def color_status(val):
-                color = 'white'; weight = 'normal'
-                if "STRONG BUY" in val: color = '#39FF14'; weight = 'bold'
-                elif "Buy" in val: color = '#66BB6A'; weight = 'bold'
-                elif "SELL" in val: color = '#FF4B4B'; weight = 'bold'
-                elif "Overpriced" in val: color = '#FF8A80'
-                return f'color: {color}; font-weight: {weight}'
+            with c_win:
+                st.subheader("🟢 Nu Doen (Sneller)")
+                winners = df_market[df_market['Winst'] >= 5].sort_values("Winst", ascending=False)
+                if winners.empty: st.caption("Geen koopjes gevonden.")
+                else:
+                    for _, row in winners.iterrows():
+                        st.markdown(
+                            f"""
+                            <div style="background-color: rgba(30, 200, 80, 0.1); padding: 10px; border-radius: 5px; margin-bottom: 8px; border-left: 4px solid #4CAF50;">
+                                <div style="font-weight: bold; font-size: 1.1em;">{row['Attractie']} <span style="font-size:0.8em; color:#AAA;">(⭐{row['Score']})</span></div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>Nu: <b style="color: #4CAF50;">{row['Nu']} min</b></span>
+                                    <span style="color: #AAA;">(Normaal: {row['Normaal']})</span>
+                                </div>
+                                <div style="font-size: 0.9em; color: #4CAF50;">▼ {row['Winst']} min winst</div>
+                            </div>
+                            """, unsafe_allow_html=True
+                        )
 
-            st.dataframe(
-                df_radar.style.map(color_status, subset=['Status'])
-                .format({"Nu": "{} min", "Benchmark": "{} min", "Winst": "{:+d} min"}),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Attractie": st.column_config.TextColumn("Attractie", width="medium"),
-                    "Nu": st.column_config.NumberColumn("Huidig", format="%d min"),
-                    "Benchmark": st.column_config.NumberColumn(col_label, format="%d min"),
-                    "Winst": st.column_config.NumberColumn("Voordeel", format="%+d min"),
-                    "Status": st.column_config.TextColumn("Advies", width="small")
-                }
-            )
+            with c_loss:
+                st.subheader("🔴 Nu Vermijden (Trager)")
+                losers = df_market[df_market['Winst'] <= -5].sort_values("Winst", ascending=True)
+                if losers.empty: st.caption("Geen grote files.")
+                else:
+                    for _, row in losers.iterrows():
+                        extra_time = abs(row['Winst'])
+                        st.markdown(
+                            f"""
+                            <div style="background-color: rgba(255, 80, 80, 0.1); padding: 10px; border-radius: 5px; margin-bottom: 8px; border-left: 4px solid #FF5252;">
+                                <div style="font-weight: bold; font-size: 1.1em;">{row['Attractie']} <span style="font-size:0.8em; color:#AAA;">(⭐{row['Score']})</span></div>
+                                <div style="display: flex; justify-content: space-between;">
+                                    <span>Nu: <b style="color: #FF5252;">{row['Nu']} min</b></span>
+                                    <span style="color: #AAA;">(Normaal: {row['Normaal']})</span>
+                                </div>
+                                <div style="font-size: 0.9em; color: #FF5252;">▲ {extra_time} min trager</div>
+                            </div>
+                            """, unsafe_allow_html=True
+                        )
         else:
-            st.info("Geen open attracties gevonden.")
+            st.info("Geen attracties gevonden die aan de filters voldoen.")
 
-# TAB 3: BESTE TIJDEN
+# TAB 3: BESTE TIJDEN (RIDE OPTIMIZER MET TIJDSVENSTER)
 with tab_best:
-    st.subheader("🔍 Zoek het beste moment (Vandaag)")
+    st.subheader("🎯 Ride Optimizer")
+    st.caption("Vind het perfecte moment voor jouw favorieten binnen een specifiek tijdsblok.")
+
     target = active_selection
-    if target:
-        s_range = st.slider("Zoekvenster:", 10, 19, (12, 16))
+    
+    if not target:
+        st.info("👈 Selecteer eerst attracties in de zijbalk.")
+    else:
+        # 1. TIJDSVENSTER KIEZEN (NIEUW)
+        # Slider van 10:00 tot 20:00 (of park sluit)
+        scan_window = st.slider(
+            "🔎 Zoek beste tijd tussen:",
+            min_value=10, 
+            max_value=19, 
+            value=(12, 16), # Default focus op de middag
+            format="%d:00"
+        )
+        
+        start_h, end_h = scan_window
+        
+        # We scannen INCLUSIEF het einduur (dus 12-15 betekent 12:00, 13:00, 14:00, 15:00)
+        hours_range = range(start_h, end_h + 1)
+        
+        optimization_data = []
         tz = pytz.timezone('Europe/Brussels')
-        now = datetime.datetime.now(tz)
-        cols = st.columns(3)
-        
-        for i, ride in enumerate(target):
-            best_h, min_w = -1, 999
-            start_h, end_h = s_range[0], s_range[1] + 1 
+        today = datetime.date.today()
 
-            for h in range(start_h, end_h):
-                t = now.replace(hour=h, minute=0)
-                w = get_wait_time_prediction(park_keuze, ride, t, live_data)
-                if isinstance(w, dict): w = 15
-                if w < min_w: min_w, best_h = w, h
-            
-            if best_h != -1:
-                border_c = "#39FF14" if min_w < 15 else ("#FFC107" if min_w < 45 else "#FF4B4B")
-                html = f"""
-                <div class="advice-card" style="border-left: 5px solid {border_c};">
-                    <div class="advice-title">{ride}</div>
-                    <div class="advice-time">Om {best_h}:00</div>
-                    <div class="advice-wait">⏳ Verwacht: {min_w} min</div>
-                </div>
-                """
-                with cols[i % 3]: st.markdown(html, unsafe_allow_html=True)
-    else: st.info("Kies eerst attracties.")
+        st.divider()
 
-# TAB 4: TOEKOMST
-with tab_future:
-    st.subheader("🔮 Precisie Simulatie")
-    c1, c2 = st.columns(2)
-    fut_date = c1.date_input("Datum", datetime.date.today() + datetime.timedelta(days=1))
-    
-    with st.expander("🌦️ Weer & Instellingen", expanded=False):
-        wc1, wc2, wc3 = st.columns(3)
-        sim_temp = wc1.slider("Temp (°C)", -5, 35, 20)
-        sim_rain_prob = wc2.slider("Neerslag (%)", 0, 100, 0, step=10)
-        sim_rain_mm = 0.0 if sim_rain_prob < 20 else 2.0
-        
-    target_future = active_selection if active_selection else rides_all[:5]
-    
-    if st.button("🔮 Voorspel Dagverloop", type="primary"):
-        chart_data = []
-        with st.spinner("Modellen draaien simulatie..."):
-            for ride in target_future:
-                for h in range(10, 19):
-                    sim_time = datetime.datetime.combine(fut_date, datetime.time(h, 0))
-                    w = get_wait_time_prediction(park_keuze, ride, sim_time, weather_override={"temp_c": sim_temp, "precip_mm": sim_rain_mm})
+        with st.spinner(f"Analyseren van {start_h}:00 tot {end_h}:00..."):
+            for ride in target:
+                trend_list = []
+                min_w = 999
+                best_h = start_h
+
+                for h in hours_range:
+                    query_time = tz.localize(datetime.datetime.combine(today, datetime.time(h, 0)))
+                    w = get_wait_time_prediction(park_keuze, ride, query_time, live_data)
                     val = w if isinstance(w, int) else 15
-                    chart_data.append({"Uur": f"{h}:00", "Attractie": ride, "Wachttijd": val})
+                    
+                    trend_list.append(val)
+                    
+                    # Check of dit het beste moment is BINNEN het venster
+                    if val < min_w:
+                        min_w = val
+                        best_h = h
+                
+                # Huidige wachttijd ophalen voor vergelijking
+                current_val = live_data.get(ride, {}).get('wait_time', 0) if live_data else trend_list[0]
+                
+                # Besparing berekenen (Verschil tussen NU en het BESTE moment in de gekozen tijd)
+                # Als het beste moment in het verleden ligt of gelijk is aan nu, is besparing 0
+                saving = max(0, current_val - min_w)
+                
+                optimization_data.append({
+                    "Attractie": ride,
+                    "Beste Tijd": f"{best_h}:00",
+                    "Min. Wacht": min_w,
+                    "Nu": current_val,
+                    "Besparing": saving,
+                    "Trend": trend_list 
+                })
 
-        df_chart = pd.DataFrame(chart_data)
-        st.markdown("### 📈 Wachttijd Verloop")
-        fig = px.line(df_chart, x="Uur", y="Wachttijd", color="Attractie", markers=True)
-        fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"))
-        st.plotly_chart(fig, use_container_width=True)
+        # 2. VISUALISATIE
+        df_opt = pd.DataFrame(optimization_data)
+        
+        # Sorteer: Waar valt de meeste winst te behalen?
+        df_opt = df_opt.sort_values("Besparing", ascending=False)
 
-# TAB 5: VOLTOOID
+        st.dataframe(
+            df_opt,
+            column_order=["Attractie", "Beste Tijd", "Min. Wacht", "Trend", "Besparing"],
+            column_config={
+                "Attractie": st.column_config.TextColumn("Attractie", width="medium"),
+                
+                "Beste Tijd": st.column_config.TextColumn(
+                    "🏆 Beste Tijd", 
+                    help=f"Het beste moment tussen {start_h}:00 en {end_h}:00",
+                    width="small"
+                ),
+                
+                "Min. Wacht": st.column_config.NumberColumn(
+                    "Verwacht", 
+                    format="%d min",
+                    help="De voorspelde wachttijd op dat tijdstip",
+                ),
+                
+                "Trend": st.column_config.LineChartColumn(
+                    f"Verloop ({start_h}u-{end_h}u)",
+                    y_min=0,
+                    y_max=60,
+                    width="medium",
+                    help="Het verloop van de drukte binnen jouw gekozen tijdsvenster."
+                ),
+                
+                "Besparing": st.column_config.ProgressColumn(
+                    "Winst vs Nu",
+                    format="%d min",
+                    min_value=0,
+                    max_value=60,
+                    help="Hoeveel minuten je bespaart t.o.v. de huidige wachttijd"
+                ),
+            },
+            hide_index=True,
+            use_container_width=True
+        )
+
+# TAB 4: TOEKOMST (INTELLIGENT PREP)
+with tab_future:
+    st.header("📅 De Ultieme Voorbereiding")
+    st.caption("De app haalt live weersvoorspellingen en historische data op om je dag te simuleren.")
+
+    c1, c2 = st.columns([1, 2])
+    fut_date = c1.date_input("Wanneer ga je?", datetime.date.today() + datetime.timedelta(days=1))
+    
+    weather_data = get_automated_weather(park_keuze, fut_date)
+    is_holiday = is_crowd_risk_day(fut_date)
+
+    with c2.container():
+        wc1, wc2, wc3 = st.columns(3)
+        wc1.metric("Temperatuur", f"{weather_data['temp_c']} °C")
+        wc2.metric("Regenkans", f"{weather_data.get('rain_prob', 0)} %")
+        wc3.metric("Type Dag", "Vakantie" if is_holiday else "Regulier")
+    
+    with st.expander("🛠️ Ik weet het beter (Handmatig aanpassen)"):
+        sim_temp = st.slider("Temp (°C)", -5, 35, int(weather_data['temp_c']))
+        sim_rain_prob = st.slider("Neerslagkans (%)", 0, 100, int(weather_data.get('rain_prob', 0)))
+        sim_rain_mm = 2.0 if sim_rain_prob > 40 else 0.0
+    
+    final_temp = sim_temp if 'sim_temp' in locals() else weather_data['temp_c']
+    final_rain_mm = sim_rain_mm if 'sim_rain_mm' in locals() else weather_data['precip_mm']
+
+    st.divider()
+
+    if st.button("🔮 Voorspel de Drukte", type="primary", use_container_width=True):
+        with st.spinner("AI berekent scenario's..."):
+            top_rides = [r for r, m in all_meta.items() if m.get('score', 0) >= 8 and m.get('type') != 'Restaurant']
+            sim_results = []
+            hours_range = range(10, 19)
+            best_start_ride = None
+            min_start_wait = 999
+            
+            for ride in top_rides:
+                total_wait = 0
+                count = 0
+                
+                start_time = datetime.datetime.combine(fut_date, datetime.time(10, 0))
+                start_w = get_wait_time_prediction(park_keuze, ride, start_time, weather_override={"temp_c": final_temp, "precip_mm": final_rain_mm, "condition": "Cloudy"})
+                if isinstance(start_w, dict): start_w = 15
+                
+                if start_w < min_start_wait:
+                    min_start_wait = start_w
+                    best_start_ride = ride
+
+                for h in hours_range:
+                    t = datetime.datetime.combine(fut_date, datetime.time(h, 0))
+                    w = get_wait_time_prediction(park_keuze, ride, t, weather_override={"temp_c": final_temp, "precip_mm": final_rain_mm, "condition": "Cloudy"})
+                    val = w if isinstance(w, int) else 15
+                    total_wait += val
+                    count += 1
+                
+                avg = total_wait / count if count > 0 else 0
+                sim_results.append({"Attractie": ride, "Gemiddelde Wachttijd": int(avg)})
+            
+            df_res = pd.DataFrame(sim_results).sort_values("Gemiddelde Wachttijd", ascending=True)
+            
+            if best_start_ride:
+                st.success(f"🚀 **Start-Tip:** Begin je dag bij **{best_start_ride}**! Verwachte wachttijd om 10:00 is slechts **{min_start_wait} min**.")
+
+            avg_wait = df_res['Gemiddelde Wachttijd'].mean()
+            if avg_wait < 20: crowd_msg = "🟢 **Conclusie:** Rustige dag. Geniet ervan!"
+            elif avg_wait < 45: crowd_msg = "🟠 **Conclusie:** Gemiddelde drukte. Blijf plannen."
+            else: crowd_msg = "🔴 **Conclusie:** Erg druk. Focus op je top 3."
+            st.info(crowd_msg)
+
+            st.markdown("### 📊 Verwachte Gemiddelde Wachttijden (Hele Dag)")
+            fig = px.bar(
+                df_res, x="Gemiddelde Wachttijd", y="Attractie", orientation='h', 
+                color="Gemiddelde Wachttijd", color_continuous_scale="RdYlGn_r", text_auto=True 
+            )
+            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), xaxis_title="Minuten")
+            st.plotly_chart(fig, use_container_width=True)
+
+# TAB 5: PERFECTE ROUTE (NIEUW!)
+with tab_perfect:
+    st.header("🏆 De 'Fun-Hunter' Modus")
+    st.info("Deze modus negeert je lijstje. Hij probeert simpelweg **zoveel mogelijk punten** te scoren binnen de tijd. Grote attracties leveren meer punten op.", icon="ℹ️")
+    
+    cp1, cp2 = st.columns(2)
+    cp1.time_input("Starttijd", value=st.session_state.start_time_val, key="perf_start", on_change=update_start_time)
+    cp2.time_input("Eindtijd", value=st.session_state.end_time_val, key="perf_end", on_change=update_end_time)
+
+    if st.button("🚀 Bereken Topscore Route", type="primary"):
+        with st.spinner("AI zoekt de ultieme strategie..."):
+            s_str = st.session_state.start_time_val.strftime("%H:%M")
+            e_str = st.session_state.end_time_val.strftime("%H:%M")
+            
+            route, _, _ = solve_max_score_route(
+                park_name=park_keuze,
+                start_str=s_str,
+                end_str=e_str,
+                start_location=st.session_state.current_loc,
+                pace_factor=pace_factor
+            )
+            
+            if not route:
+                st.error("Kon geen route vinden. Is het park al dicht?")
+            else:
+                st.success("🎯 Strategie gevonden! Zie hieronder.")
+                for i, step in enumerate(route):
+                    label = f"**{step['start_walk']}** | {step['ride']}"
+                    with st.expander(label, expanded=(i==0)):
+                        c1, c2 = st.columns([1,2])
+                        c1.write(f"🚶 Loop: {step['walk_min']} min")
+                        c1.write(f"⏳ Wacht: {step['wait_min']} min")
+                        c2.info(f"{step['note']}")
+
+# TAB 6: VOLTOOID (DOORGESCHOVEN)
 with tab_done:
     if st.session_state.completed:
         st.success(f"Al {len(st.session_state.completed)} gedaan!")
