@@ -6,20 +6,20 @@ import numpy as np
 import importlib
 import pytz 
 
-# Forceer reload van route_solver bij elke interactie
+# Force reload of route_solver on every interaction
 import route_solver
 importlib.reload(route_solver)
 
-# Importeer BEIDE solvers
+# Import BOTH solvers
 from route_solver import solve_route_with_priorities, solve_max_score_route, fetch_live_data, get_wait_time_prediction
 from queuequest_meta import ATTRACTION_METADATA
 from holiday_utils import is_crowd_risk_day
 
-# Probeer weather_utils te laden (zodat het script niet crasht als het bestand mist)
+# Try to load weather_utils
 try:
     from weather_utils import get_automated_weather
 except ImportError:
-    # Fallback functie als het bestand er niet is
+    # Fallback function if file is missing
     def get_automated_weather(park, date):
         return {"temp_c": 15, "precip_mm": 0.0, "rain_prob": 10, "source": "⚠️ Fallback"}
 
@@ -55,11 +55,11 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-# --- FUNCTIES VOOR UITLEG EN STRATEGIE (GEOPTIMALISEERD MET CACHE) ---
+# --- FUNCTIONS FOR EXPLANATION & STRATEGY (CACHED) ---
 
 @st.cache_data(show_spinner=False)
 def generate_strategy_explanation(route, park_name):
-    """Genereert een logische verklaring voor de gekozen route."""
+    """Generates a logical explanation for the chosen route (English)."""
     if not route: return None, None
     
     first_ride = route[0]['ride']
@@ -67,47 +67,47 @@ def generate_strategy_explanation(route, park_name):
     total_walk = sum(r['walk_min'] for r in rides_only)
     avg_walk = total_walk / len(rides_only) if rides_only else 0
     
-    # Lijst met 'Ochtend-Killers'
+    # List of 'Morning Killers'
     headliners = {
         "EFTELING": ["Baron 1898", "Symbolica", "De Vliegende Hollander", "Joris en de Draak"],
         "PHANTASIALAND": ["Taron", "F.L.Y.", "Black Mamba", "Maus au Chocolat"],
         "WALIBI_BELGIUM": ["Kondaa", "Pulsar", "Psyké Underground"]
     }
     
-    # SCENARIO 1: De Knalstart
+    # SCENARIO 1: The Rocket Start
     if park_name in headliners and any(h in first_ride for h in headliners[park_name]):
-        return "🚀 De 'Knalstart' Strategie", f"We sturen je direct naar **{first_ride}**. Dit is de populairste attractie; door deze nu te pakken, bespaar je later op de dag waarschijnlijk 30+ minuten wachten."
+        return "🚀 The 'Rocket Start' Strategy", f"We are sending you straight to **{first_ride}**. This is a top-tier attraction; doing it now will likely save you 30+ minutes compared to later."
 
-    # SCENARIO 2: De Efficiënte Loper
+    # SCENARIO 2: The Efficient Walker
     if avg_walk < 4: 
-        return "👟 De 'Efficiënte' Strategie", "Deze route bundelt attracties die dicht bij elkaar liggen. Je looptijd is minimaal, waardoor je meer tijd overhoudt voor ritjes en terrasjes."
+        return "👟 The 'Efficient Walker' Strategy", "This route bundles attractions that are close together. Walking time is minimized, leaving more time for rides and breaks."
 
-    # SCENARIO 3: De 'Opbouw'
+    # SCENARIO 3: The 'Ramp Up'
     if route[0]['wait_min'] <= 10:
-        return "📈 De 'Opbouw' Strategie", f"We beginnen rustig bij **{first_ride}** om direct een succesje te boeken met korte wachttijd. De drukkere attracties plannen we later."
+        return "📈 The 'Ramp Up' Strategy", f"We start calmly at **{first_ride}** to bag an immediate win with a short queue. The busier rides are planned for later."
 
     # DEFAULT
-    return "⚖️ De 'Balans' Strategie", "Deze volgorde is berekend om een optimale mix te vinden tussen jouw Must-Haves prioriteit geven en kriskras door het park lopen voorkomen."
+    return "⚖️ The 'Balanced' Strategy", "This order calculates the optimal mix between prioritizing your Must-Haves and avoiding walking back and forth too much."
 
 def get_step_reason(step, prev_step_loc, park_name, live_data):
     """
-    Bepaalt de reden en berekent 'Opportunity Cost' (Winst t.o.v. later gaan).
+    Determines the reason and calculates 'Opportunity Cost'.
     """
     ride = step['ride']
     
-    # Check voor Score Modus (heeft geen wait_min direct beschikbaar in alle gevallen)
+    # Check for Score Mode (might not have wait_min directly available in all cases)
     wait_now = step.get('wait_min', 0)
     walk = step.get('walk_min', 0)
     
-    # 1. Is het een Lunch?
+    # 1. Is it Lunch?
     if step['type'] == 'LUNCH':
-        return "🍽️ Tijd om even op te laden."
+        return "🍽️ Time to recharge."
     
-    # 2. Is het een Score Run?
+    # 2. Is it a Score Run?
     if step['type'] == 'SCORE':
-        return "💎 **Punten Pakker:** Deze attractie levert nu de meeste waarde (plezier/tijd) op."
+        return "💎 **Score Booster:** This ride currently offers the best value (fun/time ratio)."
 
-    # 3. TOEKOMST ANALYSE
+    # 3. FUTURE ANALYSIS
     try:
         tz = pytz.timezone('Europe/Brussels')
         now = datetime.datetime.now(tz)
@@ -115,10 +115,10 @@ def get_step_reason(step, prev_step_loc, park_name, live_data):
         h, m = map(int, step['arrival_time'].split(':'))
         arrival_dt = tz.localize(datetime.datetime.combine(today, datetime.time(h, m)))
         
-        # We kijken 2 uur in de toekomst
+        # Look 2 hours into the future
         future_check_time = arrival_dt + datetime.timedelta(hours=2)
         
-        # Voorspel wachttijd in de toekomst
+        # Predict wait time in future
         wait_later = get_wait_time_prediction(park_name, ride, future_check_time, live_data_snapshot=None)
         if isinstance(wait_later, dict): wait_later = 15
         
@@ -127,35 +127,35 @@ def get_step_reason(step, prev_step_loc, park_name, live_data):
     except:
         time_saved = 0
 
-    # --- DE STRATEGIE REGELS ---
+    # --- THE STRATEGY RULES ---
 
-    # REGEL A: De "Meesterzet"
+    # RULE A: The "Master Move"
     if time_saved >= 15:
-        return f"📉 **Slimme zet:** Straks loopt de rij hier op naar ca. {wait_later} min. **Je bespaart {time_saved} min** door nu te gaan."
+        return f"📉 **Smart Move:** Wait times here will rise to approx. {wait_later} min later. **You save {time_saved} min** by going now."
 
-    # REGEL B: De "Vroege Vogel"
+    # RULE B: The "Early Bird"
     headliners = ["Baron 1898", "Symbolica", "Joris en de Draak", "Taron", "F.L.Y.", "Black Mamba", "Kondaa"]
     if any(h in ride for h in headliners) and wait_now < 15:
-        return f"⚡ **Kans:** Topattractie met slechts {wait_now} min wachtrij. Pakken nu het kan!"
+        return f"⚡ **Opportunity:** Top attraction with only {wait_now} min wait. Catch it while you can!"
 
-    # REGEL C: De "Buurman"
+    # RULE C: The "Neighbor"
     if walk <= 3 and prev_step_loc != "Ingang":
         extra_msg = ""
-        if time_saved > 5: extra_msg = f" (En je bespaart {time_saved} min t.o.v. vanmiddag)"
-        return f"📍 **Dichtbij:** Ligt praktisch naast je vorige locatie.{extra_msg}"
+        if time_saved > 5: extra_msg = f" (And you save {time_saved} min vs this afternoon)"
+        return f"📍 **Proximity:** It's practically next door to your previous location.{extra_msg}"
 
-    # REGEL D: De "Snelle Hap"
+    # RULE D: The "Quick Win"
     if step['type'] == "SHOULD" and wait_now <= 5:
-        return "👌 **Opvulling:** Wachttijd is minimaal, dus prima om 'mee te pakken' op weg naar de volgende."
+        return "👌 **Filler:** Minimal wait time, so perfect to 'pick up' on the way to the next big one."
 
-    # REGEL E: Consistentie
+    # RULE E: Consistency
     if time_saved >= 5:
-        return f"✅ **Goede Timing:** Het is nu {time_saved} min rustiger dan gemiddeld vanmiddag."
+        return f"✅ **Good Timing:** It is {time_saved} min quieter now than the afternoon average."
 
-    return "⚖️ **Route Optimalisatie:** Past nu het beste in je reisschema."
+    return "⚖️ **Route Optimization:** Fits best in your schedule right now."
     
 
-# --- 1. STATE INITIALISATIE ---
+# --- 1. STATE INITIALIZATION ---
 defaults = {
     'completed': [],
     'current_loc': "Ingang",
@@ -171,17 +171,15 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state: st.session_state[k] = v
 
-# --- 2. INTELLIGENTE TIJD INITIALISATIE ---
+# --- 2. INTELLIGENT TIME INITIALIZATION ---
 if 'start_time_val' not in st.session_state:
     tz = pytz.timezone('Europe/Brussels')
     now = datetime.datetime.now(tz)
     
-    # Check: Is het tussen 10:00 en 18:00?
+    # Check: Is it between 10:00 and 18:00?
     if 10 <= now.hour < 18:
-        # Ja: Pak huidige tijd
         st.session_state.start_time_val = now.time().replace(second=0, microsecond=0)
     else:
-        # Nee: Pak 10:00
         st.session_state.start_time_val = datetime.time(10, 0)
 
 if 'end_time_val' not in st.session_state:
@@ -197,38 +195,38 @@ def mark_done(ride_name):
     st.session_state.current_loc = ride_name
     st.session_state.last_route = None
     
-    # Update tijd naar NU
+    # Update time to NOW
     tz = pytz.timezone('Europe/Brussels')
     st.session_state.start_time_val = datetime.datetime.now(tz).time()
 
 st.title("🎢 QueueQuest Ultimate")
 
 # --- SIDEBAR ---
-st.sidebar.header("⚙️ Instellingen")
+st.sidebar.header("⚙️ Settings")
 park_keuze = st.sidebar.selectbox("Park:", ("EFTELING", "PHANTASIALAND", "WALIBI_BELGIUM"))
 
 all_meta = {k: v for k, v in ATTRACTION_METADATA.items() if v['park'] == park_keuze}
 rides_all = sorted([r for r, m in all_meta.items() if m.get('type') not in ['Restaurant', 'Snack'] and "Single-rider" not in r])
 restaurants = sorted([r for r, m in all_meta.items() if m.get('type') in ['Restaurant', 'Snack']])
 
-st.sidebar.subheader("📍 Locatie")
+st.sidebar.subheader("📍 Location")
 loc_options = ["Ingang"] + rides_all + restaurants
 if st.session_state.current_loc not in loc_options: st.session_state.current_loc = "Ingang"
-st.sidebar.selectbox("Je bent nu bij:", loc_options, key="current_loc")
+st.sidebar.selectbox("You are currently at:", loc_options, key="current_loc")
 
-# --- NIEUW: HET LOOP-PROFIEL (SLIDER) ---
-st.sidebar.subheader("🏃 Wandeltempo")
+# --- PACING PROFILE (SLIDER) ---
+st.sidebar.subheader("🏃 Walking Pace")
 pace_select = st.sidebar.select_slider(
-    "Hoe snel loop je?",
-    options=["Relaxed 🐢", "Gemiddeld 🚶", "Haastig 🐇"],
-    value="Gemiddeld 🚶"
+    "How fast do you walk?",
+    options=["Relaxed 🐢", "Average 🚶", "Rushing 🐇"],
+    value="Average 🚶"
 )
-# Vertaal selectie naar factor (1.0 = normaal, >1 = trager, <1 = sneller)
-pace_map = {"Relaxed 🐢": 1.4, "Gemiddeld 🚶": 1.0, "Haastig 🐇": 0.7}
+# Translate selection to factor
+pace_map = {"Relaxed 🐢": 1.4, "Average 🚶": 1.0, "Rushing 🐇": 0.7}
 pace_factor = pace_map[pace_select]
 
-# --- SELECTIE ---
-st.sidebar.subheader("🎯 Wensenlijst")
+# --- SELECTION ---
+st.sidebar.subheader("🎯 Wishlist")
 keys_to_clean = ['mc', 'sc', 'md', 'sd', 'mo', 'so']
 for k in keys_to_clean:
     if st.session_state.completed:
@@ -238,43 +236,42 @@ coasters = [r for r in rides_all if all_meta[r].get('type') in ['Coaster', 'Wate
 darkrides = [r for r in rides_all if all_meta[r].get('type') in ['DarkRide', 'Madhouse', 'Cinema']]
 others = [r for r in rides_all if r not in coasters and r not in darkrides]
 
-with st.sidebar.expander("🎢 Achtbanen", expanded=True):
+with st.sidebar.expander("🎢 Rollercoasters", expanded=True):
     st.multiselect("Must-Haves", coasters, key="mc")
     remain_c = [r for r in coasters if r not in st.session_state.mc]
-    st.multiselect("Opvulling", remain_c, key="sc")
+    st.multiselect("Fillers", remain_c, key="sc")
 
 with st.sidebar.expander("👻 Darkrides & Shows"):
     st.multiselect("Must-Haves", darkrides, key="md")
     remain_d = [r for r in darkrides if r not in st.session_state.md]
-    st.multiselect("Opvulling", remain_d, key="sd")
+    st.multiselect("Fillers", remain_d, key="sd")
 
-with st.sidebar.expander("🎡 Overige"):
+with st.sidebar.expander("🎡 Others"):
     st.multiselect("Must-Haves", others, key="mo")
     remain_o = [r for r in others if r not in st.session_state.mo]
-    st.multiselect("Opvulling", remain_o, key="so")
+    st.multiselect("Fillers", remain_o, key="so")
 
-# --- AGGREGATIE (DE FIX) ---
+# --- AGGREGATION ---
 must_haves = st.session_state.mc + st.session_state.md + st.session_state.mo
 should_haves = st.session_state.sc + st.session_state.sd + st.session_state.so
 
 # Lunch
 st.sidebar.markdown("---")
-with st.sidebar.expander("🍔 Lunch Pauze"):
-    want_lunch = st.checkbox("Inplannen?", value=not st.session_state.lunch_done)
+with st.sidebar.expander("🍔 Lunch Break"):
+    want_lunch = st.checkbox("Plan lunch?", value=not st.session_state.lunch_done)
     if want_lunch and not st.session_state.lunch_done:
-        l_time = st.time_input("Hoe laat?", datetime.time(12, 30))
-        l_dur = st.number_input("Minuten", 15, 120, 45, step=15)
-        l_rest = st.selectbox("Waar?", restaurants)
+        l_time = st.time_input("What time?", datetime.time(12, 30))
+        l_dur = st.number_input("Minutes", 15, 120, 45, step=15)
+        l_rest = st.selectbox("Where?", restaurants)
         lunch_config = {'time': l_time, 'duration': l_dur, 'restaurant': l_rest}
     else:
         lunch_config = None
-        if st.session_state.lunch_done: st.sidebar.success("Lunch gehad! ✅")
+        if st.session_state.lunch_done: st.sidebar.success("Lunch finished! ✅")
 
-# Live data knop (AANGEPAST VOOR CACHING)
-if st.sidebar.button("🔄 Ververs Live Data"):
-    # HIER LEGEN WE DE CACHE OM EEN ECHTE REFRESH TE FORCEREN
+# Live data button
+if st.sidebar.button("🔄 Refresh Live Data"):
     st.cache_data.clear()
-    with st.spinner("Verbinden met park servers..."):
+    with st.spinner("Connecting to park servers..."):
         st.session_state.live_data = fetch_live_data(park_keuze)
 live_data = st.session_state.get('live_data', {})
 
@@ -282,19 +279,19 @@ active_selection = must_haves + should_haves
 is_park_closed = len(live_data) > 0 and len([r for r in live_data.values() if r['is_open']]) < 3
 if not is_park_closed and live_data:
     closed_now = [r for r in active_selection if r in live_data and not live_data[r]['is_open']]
-    if closed_now: st.sidebar.error(f"⛔ Nu Gesloten: {', '.join(closed_now)}")
-elif is_park_closed: st.sidebar.info("ℹ️ Park gesloten (Forecast Modus)")
+    if closed_now: st.sidebar.error(f"⛔ Closed Now: {', '.join(closed_now)}")
+elif is_park_closed: st.sidebar.info("ℹ️ Park Closed (Forecast Mode)")
 
-# --- WAIT OR GO ADVISEUR (SIDEBAR) ---
+# --- WAIT OR GO ADVISOR (SIDEBAR) ---
 if not is_park_closed and active_selection:
     st.sidebar.markdown("---")
     st.sidebar.subheader("🧠 Wait or Go?")
     
-    # We kijken alleen naar je Must-Haves
+    # Analyze Must-Haves
     targets = st.session_state.mc + st.session_state.md + st.session_state.mo
     
     if not targets:
-        st.sidebar.caption("Selecteer 'Must-Haves' voor advies.")
+        st.sidebar.caption("Select 'Must-Haves' for advice.")
     else:
         tz = pytz.timezone('Europe/Brussels')
         now_advice = datetime.datetime.now(tz)
@@ -308,45 +305,45 @@ if not is_park_closed and active_selection:
                 
             current_w = live_data[ride]['wait_time']
             
-            # Forecast voor toekomst
+            # Forecast
             future_w = get_wait_time_prediction(park_keuze, ride, future_advice, live_data_snapshot=None)
             if isinstance(future_w, dict): future_w = 15
             
             diff = future_w - current_w
             
-            # Advies Logica
+            # Advice Logic
             if diff >= 10:
-                st.sidebar.success(f"🏃 **REN naar {ride}!**\n\nNu: {current_w}m ➝ Straks: {future_w}m\n*(Bespaar {diff} min)*")
+                st.sidebar.success(f"🏃 **RUN to {ride}!**\n\nNow: {current_w}m ➝ Later: {future_w}m\n*(Save {diff} min)*")
                 advice_count += 1
             elif diff <= -10:
-                st.sidebar.warning(f"☕ **Wacht met {ride}**\n\nNu: {current_w}m ➝ Straks: {future_w}m\n*(Het zakt {abs(diff)} min)*")
+                st.sidebar.warning(f"☕ **Wait with {ride}**\n\nNow: {current_w}m ➝ Later: {future_w}m\n*(Drops by {abs(diff)} min)*")
                 advice_count += 1
         
         if advice_count == 0:
-            st.sidebar.info("Geen sterke stijgers of dalers voorspeld.")
+            st.sidebar.info("No drastic changes predicted.")
 
 
-# --- TABS (HERINGEDEELD) ---
+# --- TABS ---
 tab_copilot, tab_radar, tab_best, tab_future, tab_perfect, tab_done = st.tabs([
     "📍 Live Route", 
     "⚡ Radar", 
-    "📊 Beste Tijden", 
-    "📅 Toekomst", 
-    "🏆 Perfecte Route", 
-    "✅ Voltooid"
+    "📊 Best Times", 
+    "📅 Future", 
+    "🏆 Perfect Route", 
+    "✅ Done"
 ])
 
-# TAB 1: CO-PILOOT
+# TAB 1: CO-PILOT
 with tab_copilot:
     c1, c2 = st.columns(2)
-    c1.time_input("Starttijd", value=st.session_state.start_time_val, key="widget_start_time", on_change=update_start_time)
-    c2.time_input("Eindtijd", value=st.session_state.end_time_val, key="widget_end_time", on_change=update_end_time)
+    c1.time_input("Start Time", value=st.session_state.start_time_val, key="widget_start_time", on_change=update_start_time)
+    c2.time_input("End Time", value=st.session_state.end_time_val, key="widget_end_time", on_change=update_end_time)
     
-    if st.button("🚀 Bereken Route", type="primary", use_container_width=True):
+    if st.button("🚀 Calculate Route", type="primary", use_container_width=True):
         if not active_selection and not lunch_config:
-            st.warning("Kies eerst attracties in de zijbalk.")
+            st.warning("Please select attractions in the sidebar first.")
         else:
-            with st.spinner("AI berekent route..."):
+            with st.spinner("AI is calculating route..."):
                 s_str = st.session_state.start_time_val.strftime("%H:%M")
                 e_str = st.session_state.end_time_val.strftime("%H:%M")
                 
@@ -366,7 +363,7 @@ with tab_copilot:
     if st.session_state.last_route:
         route = st.session_state.last_route
         if st.session_state.last_closed and not is_park_closed: 
-            st.error(f"⛔ Gesloten: {', '.join(st.session_state.last_closed)}")
+            st.error(f"⛔ Closed: {', '.join(st.session_state.last_closed)}")
 
         strat_title, strat_msg = generate_strategy_explanation(route, park_keuze)
         if strat_title:
@@ -376,10 +373,10 @@ with tab_copilot:
         ai_wait = sum(s['wait_min'] for s in rides_only)
         m1, m2, m3 = st.columns(3)
         m1.metric("Rides", len(rides_only))
-        m2.metric("Wachttijd", f"{ai_wait} min")
-        m3.metric("Volgende", route[0]['ride'] if route else "Klaar")
+        m2.metric("Total Wait", f"{ai_wait} min")
+        m3.metric("Next Up", route[0]['ride'] if route else "Done")
 
-        st.subheader("👇 Jouw Planning")
+        st.subheader("👇 Your Plan")
         prev_loc = st.session_state.current_loc 
 
         for i, step in enumerate(route):
@@ -389,7 +386,7 @@ with tab_copilot:
             elif "Coaster" in ATTRACTION_METADATA.get(step['ride'], {}).get('type', ''): icon = "🎢"
             elif "DarkRide" in ATTRACTION_METADATA.get(step['ride'], {}).get('type', ''): icon = "👻"
             
-            label = f"**{step['start_walk']}** | {icon} Ga naar {step['ride']}"
+            label = f"**{step['start_walk']}** | {icon} Go to {step['ride']}"
             if is_next: label = "👉 " + label
 
             with st.expander(label, expanded=is_next):
@@ -397,9 +394,9 @@ with tab_copilot:
                 reason_msg = get_step_reason(step, prev_loc, park_keuze, live_data)
                 
                 if step['type'] == "LUNCH":
-                    c1.write(f"🚶 Loop: {step['walk_min']} min")
-                    c2.info(f"{reason_msg}\n\n*Duur: {step['note']}*")
-                    if c3.button("✅ Gegeten!", key=f"lunch_{i}"):
+                    c1.write(f"🚶 Walk: {step['walk_min']} min")
+                    c2.info(f"{reason_msg}\n\n*Duration: {step['note']}*")
+                    if c3.button("✅ Ate!", key=f"lunch_{i}"):
                         st.session_state.lunch_done = True
                         st.session_state.current_loc = step['ride'].replace("🍽️ Lunch: ", "")
                         st.session_state.last_route = None
@@ -407,54 +404,54 @@ with tab_copilot:
                         st.session_state.start_time_val = datetime.datetime.now(tz).time()
                         st.rerun()
                 else:
-                    c1.write(f"🚶 Loop: {step['walk_min']} min")
-                    c1.write(f"⏳ Wacht: {step['wait_min']} min")
+                    c1.write(f"🚶 Walk: {step['walk_min']} min")
+                    c1.write(f"⏳ Wait: {step['wait_min']} min")
                     source_label = "Live Data" if "Live" in step['note'] else "Forecast"
                     prio_label = " | ⭐ Must-Do" if step['type'] == "MUST" else ""
                     c2.info(f"{reason_msg}\n\n*({source_label}{prio_label})*")
-                    c3.button("✅ Gedaan!", key=f"done_{step['ride']}_{i}", on_click=mark_done, args=(step['ride'],))
+                    c3.button("✅ Done!", key=f"done_{step['ride']}_{i}", on_click=mark_done, args=(step['ride'],))
             prev_loc = step['ride']
 
     elif st.session_state.last_route == []:
         if st.session_state.last_closed:
-            st.error("⛔ Geen route mogelijk: Al je gekozen attracties zijn gesloten!")
-            st.write("De volgende attracties zijn dicht:")
+            st.error("⛔ No route possible: All selected attractions are closed!")
+            st.write("The following rides are closed:")
             for c in st.session_state.last_closed:
                 st.write(f"- 🔴 {c}")
         elif not active_selection:
-            st.warning("👈 Selecteer eerst attracties in de zijbalk.")
+            st.warning("👈 Select attractions in the sidebar first.")
         else:
-            st.success("🎉 Alles gedaan! Je hebt je hele lijst afgewerkt.")
+            st.success("🎉 All done! You have finished your list.")
 
 # TAB 2: MARKET ANALYSIS (MARKET WATCH)
 with tab_radar:
-    st.subheader("📉 Market Watch: Kansen & Valkuilen")
+    st.subheader("📉 Market Watch: Opportunities & Traps")
     
-    # --- 1. CONFIGURATIE & FILTERS ---
+    # --- 1. CONFIGURATION & FILTERS ---
     c_filters, c_info = st.columns([2, 2])
     
     with c_filters:
         benchmark_mode = st.radio(
-            "Vergelijk met:", 
-            ["🤖 AI Verwachting (Vandaag)", "📊 Jaargemiddelde"],
+            "Compare with:", 
+            ["🤖 AI Expectation (Today)", "📊 Yearly Average"],
             horizontal=True,
             label_visibility="collapsed"
         )
         score_filter = st.select_slider(
-            "Filter op Kwaliteit:",
-            options=["Alles", "Vanaf 6 (Goed)", "8+ (Alleen Toppers)"],
-            value="Alles"
+            "Filter by Quality:",
+            options=["All", "From 6 (Good)", "8+ (Top Tier)"],
+            value="All"
         )
 
     if benchmark_mode.startswith("🤖"):
-        c_info.info("💡 **AI Modus:** Vergelijkt live drukte met de voorspelling voor *vandaag*.")
+        c_info.info("💡 **AI Mode:** Compares live crowds with the prediction for *today*.")
     else:
-        c_info.info("💡 **Historisch:** Vergelijkt live drukte met het *gemiddelde* van het jaar.")
+        c_info.info("💡 **Historical:** Compares live crowds with the *yearly average*.")
 
     st.divider()
 
     if not live_data:
-        st.warning("Geen live data beschikbaar. Druk op '🔄 Ververs Live Data' in de sidebar.")
+        st.warning("No live data available. Press '🔄 Refresh Live Data' in the sidebar.")
     else:
         historical_averages = {
             "Baron 1898": 40, "Python": 25, "Vliegende Hollander": 35,
@@ -477,8 +474,8 @@ with tab_radar:
             meta = ATTRACTION_METADATA.get(ride_name, {})
             score = meta.get('score', 5)
             
-            if score_filter == "Vanaf 6 (Goed)" and score < 6: continue
-            if score_filter == "8+ (Alleen Toppers)" and score < 8: continue
+            if score_filter == "From 6 (Good)" and score < 6: continue
+            if score_filter == "8+ (Top Tier)" and score < 8: continue
 
             if "AI" in benchmark_mode:
                 predicted = get_wait_time_prediction(park_keuze, ride_name, now_radar, live_data_snapshot=None)
@@ -491,10 +488,10 @@ with tab_radar:
             
             if norm_wait > 5 or curr_wait > 5:
                 market_data.append({
-                    "Attractie": ride_name,
-                    "Nu": curr_wait,
-                    "Normaal": norm_wait, 
-                    "Winst": diff,
+                    "Attraction": ride_name,
+                    "Now": curr_wait,
+                    "Normal": norm_wait, 
+                    "Gain": diff,
                     "Score": score
                 })
         
@@ -504,18 +501,18 @@ with tab_radar:
             st.markdown("### 🎯 Opportunity Matrix")
             fig = px.scatter(
                 df_market,
-                x="Normaal",
-                y="Winst",
-                color="Winst",
+                x="Normal",
+                y="Gain",
+                color="Gain",
                 size="Score", 
-                text="Attractie",
+                text="Attraction",
                 color_continuous_scale="RdYlGn", 
                 range_color=[-20, 20],
-                labels={"Normaal": "Normale Drukte", "Winst": "Minuten Sneller"},
+                labels={"Normal": "Normal Crowds", "Gain": "Minutes Saved"},
                 height=450
             )
             
-            fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Gemiddeld")
+            fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Average")
             fig.update_traces(textposition='top center', marker=dict(line=dict(width=1, color='DarkSlateGrey')))
             fig.update_layout(
                 plot_bgcolor="rgba(0,0,0,0)", 
@@ -523,78 +520,75 @@ with tab_radar:
                 font=dict(color="white"),
                 showlegend=False
             )
-            st.plotly_chart(fig, use_container_width=True) # FIX: width="stretch" indien nodig, maar use_container_width is veilige fallback voor oudere versies
+            st.plotly_chart(fig, use_container_width=True)
             
-            st.caption(f"Leeswijzer: Rechtsboven zijn de toppers die nu rustig zijn. (Filter actief: {score_filter})")
+            st.caption(f"Guide: Top-right are top rides that are quiet now. (Filter active: {score_filter})")
 
             st.divider()
 
             c_win, c_loss = st.columns(2)
             
             with c_win:
-                st.subheader("🟢 Nu Doen (Sneller)")
-                winners = df_market[df_market['Winst'] >= 5].sort_values("Winst", ascending=False)
-                if winners.empty: st.caption("Geen koopjes gevonden.")
+                st.subheader("🟢 Do Now (Faster)")
+                winners = df_market[df_market['Gain'] >= 5].sort_values("Gain", ascending=False)
+                if winners.empty: st.caption("No bargains found.")
                 else:
                     for _, row in winners.iterrows():
                         st.markdown(
                             f"""
                             <div style="background-color: rgba(30, 200, 80, 0.1); padding: 10px; border-radius: 5px; margin-bottom: 8px; border-left: 4px solid #4CAF50;">
-                                <div style="font-weight: bold; font-size: 1.1em;">{row['Attractie']} <span style="font-size:0.8em; color:#AAA;">(⭐{row['Score']})</span></div>
+                                <div style="font-weight: bold; font-size: 1.1em;">{row['Attraction']} <span style="font-size:0.8em; color:#AAA;">(⭐{row['Score']})</span></div>
                                 <div style="display: flex; justify-content: space-between;">
-                                    <span>Nu: <b style="color: #4CAF50;">{row['Nu']} min</b></span>
-                                    <span style="color: #AAA;">(Normaal: {row['Normaal']})</span>
+                                    <span>Now: <b style="color: #4CAF50;">{row['Now']} min</b></span>
+                                    <span style="color: #AAA;">(Normal: {row['Normal']})</span>
                                 </div>
-                                <div style="font-size: 0.9em; color: #4CAF50;">▼ {row['Winst']} min winst</div>
+                                <div style="font-size: 0.9em; color: #4CAF50;">▼ {row['Gain']} min gain</div>
                             </div>
                             """, unsafe_allow_html=True
                         )
 
             with c_loss:
-                st.subheader("🔴 Nu Vermijden (Trager)")
-                losers = df_market[df_market['Winst'] <= -5].sort_values("Winst", ascending=True)
-                if losers.empty: st.caption("Geen grote files.")
+                st.subheader("🔴 Avoid Now (Slower)")
+                losers = df_market[df_market['Gain'] <= -5].sort_values("Gain", ascending=True)
+                if losers.empty: st.caption("No major traffic jams.")
                 else:
                     for _, row in losers.iterrows():
-                        extra_time = abs(row['Winst'])
+                        extra_time = abs(row['Gain'])
                         st.markdown(
                             f"""
                             <div style="background-color: rgba(255, 80, 80, 0.1); padding: 10px; border-radius: 5px; margin-bottom: 8px; border-left: 4px solid #FF5252;">
-                                <div style="font-weight: bold; font-size: 1.1em;">{row['Attractie']} <span style="font-size:0.8em; color:#AAA;">(⭐{row['Score']})</span></div>
+                                <div style="font-weight: bold; font-size: 1.1em;">{row['Attraction']} <span style="font-size:0.8em; color:#AAA;">(⭐{row['Score']})</span></div>
                                 <div style="display: flex; justify-content: space-between;">
-                                    <span>Nu: <b style="color: #FF5252;">{row['Nu']} min</b></span>
-                                    <span style="color: #AAA;">(Normaal: {row['Normaal']})</span>
+                                    <span>Now: <b style="color: #FF5252;">{row['Now']} min</b></span>
+                                    <span style="color: #AAA;">(Normal: {row['Normal']})</span>
                                 </div>
-                                <div style="font-size: 0.9em; color: #FF5252;">▲ {extra_time} min trager</div>
+                                <div style="font-size: 0.9em; color: #FF5252;">▲ {extra_time} min slower</div>
                             </div>
                             """, unsafe_allow_html=True
                         )
         else:
-            st.info("Geen attracties gevonden die aan de filters voldoen.")
+            st.info("No attractions found matching criteria.")
 
-# TAB 3: BESTE TIJDEN (RIDE OPTIMIZER MET TIJDSVENSTER)
+# TAB 3: BEST TIMES (RIDE OPTIMIZER WITH TIME WINDOW)
 with tab_best:
     st.subheader("🎯 Ride Optimizer")
-    st.caption("Vind het perfecte moment voor jouw favorieten binnen een specifiek tijdsblok.")
+    st.caption("Find the perfect moment for your favorites within a specific time window.")
 
     target = active_selection
     
     if not target:
-        st.info("👈 Selecteer eerst attracties in de zijbalk.")
+        st.info("👈 Select attractions in the sidebar first.")
     else:
-        # 1. TIJDSVENSTER KIEZEN (NIEUW)
-        # Slider van 10:00 tot 20:00 (of park sluit)
+        # 1. TIME WINDOW SELECTION
         scan_window = st.slider(
-            "🔎 Zoek beste tijd tussen:",
+            "🔎 Search best time between:",
             min_value=10, 
             max_value=19, 
-            value=(12, 16), # Default focus op de middag
+            value=(12, 16),
             format="%d:00"
         )
         
         start_h, end_h = scan_window
-        
-        # We scannen INCLUSIEF het einduur (dus 12-15 betekent 12:00, 13:00, 14:00, 15:00)
         hours_range = range(start_h, end_h + 1)
         
         optimization_data = []
@@ -603,7 +597,7 @@ with tab_best:
 
         st.divider()
 
-        with st.spinner(f"Analyseren van {start_h}:00 tot {end_h}:00..."):
+        with st.spinner(f"Analyzing from {start_h}:00 to {end_h}:00..."):
             for ride in target:
                 trend_list = []
                 min_w = 999
@@ -616,91 +610,84 @@ with tab_best:
                     
                     trend_list.append(val)
                     
-                    # Check of dit het beste moment is BINNEN het venster
                     if val < min_w:
                         min_w = val
                         best_h = h
                 
-                # Huidige wachttijd ophalen voor vergelijking
                 current_val = live_data.get(ride, {}).get('wait_time', 0) if live_data else trend_list[0]
-                
-                # Besparing berekenen (Verschil tussen NU en het BESTE moment in de gekozen tijd)
-                # Als het beste moment in het verleden ligt of gelijk is aan nu, is besparing 0
                 saving = max(0, current_val - min_w)
                 
                 optimization_data.append({
-                    "Attractie": ride,
-                    "Beste Tijd": f"{best_h}:00",
-                    "Min. Wacht": min_w,
-                    "Nu": current_val,
-                    "Besparing": saving,
+                    "Attraction": ride,
+                    "Best Time": f"{best_h}:00",
+                    "Min. Wait": min_w,
+                    "Now": current_val,
+                    "Saving": saving,
                     "Trend": trend_list 
                 })
 
-        # 2. VISUALISATIE
+        # 2. VISUALIZATION
         df_opt = pd.DataFrame(optimization_data)
-        
-        # Sorteer: Waar valt de meeste winst te behalen?
-        df_opt = df_opt.sort_values("Besparing", ascending=False)
+        df_opt = df_opt.sort_values("Saving", ascending=False)
 
         st.dataframe(
             df_opt,
-            column_order=["Attractie", "Beste Tijd", "Min. Wacht", "Trend", "Besparing"],
+            column_order=["Attraction", "Best Time", "Min. Wait", "Trend", "Saving"],
             column_config={
-                "Attractie": st.column_config.TextColumn("Attractie", width="medium"),
+                "Attraction": st.column_config.TextColumn("Attraction", width="medium"),
                 
-                "Beste Tijd": st.column_config.TextColumn(
-                    "🏆 Beste Tijd", 
-                    help=f"Het beste moment tussen {start_h}:00 en {end_h}:00",
+                "Best Time": st.column_config.TextColumn(
+                    "🏆 Best Time", 
+                    help=f"The best moment between {start_h}:00 and {end_h}:00",
                     width="small"
                 ),
                 
-                "Min. Wacht": st.column_config.NumberColumn(
-                    "Verwacht", 
+                "Min. Wait": st.column_config.NumberColumn(
+                    "Expect", 
                     format="%d min",
-                    help="De voorspelde wachttijd op dat tijdstip",
+                    help="Predicted wait time at that hour",
                 ),
                 
                 "Trend": st.column_config.LineChartColumn(
-                    f"Verloop ({start_h}u-{end_h}u)",
+                    f"Trend ({start_h}h-{end_h}h)",
                     y_min=0,
                     y_max=60,
                     width="medium",
-                    help="Het verloop van de drukte binnen jouw gekozen tijdsvenster."
+                    help="Crowd trend within your window."
                 ),
                 
-                "Besparing": st.column_config.ProgressColumn(
-                    "Winst vs Nu",
+                "Saving": st.column_config.ProgressColumn(
+                    "Gain vs Now",
                     format="%d min",
                     min_value=0,
                     max_value=60,
-                    help="Hoeveel minuten je bespaart t.o.v. de huidige wachttijd"
+                    help="Minutes saved compared to going right now"
                 ),
             },
             hide_index=True,
             use_container_width=True
         )
 
-# TAB 4: TOEKOMST (INTELLIGENT PREP)
+# TAB 4: FUTURE (INTELLIGENT PREP)
 with tab_future:
-    st.header("📅 De Ultieme Voorbereiding")
-    st.caption("De app haalt live weersvoorspellingen en historische data op om je dag te simuleren.")
+    st.header("📅 The Ultimate Prep")
+    st.caption("The app retrieves live weather forecasts and historical data to simulate your day.")
 
     c1, c2 = st.columns([1, 2])
-    fut_date = c1.date_input("Wanneer ga je?", datetime.date.today() + datetime.timedelta(days=1))
+    fut_date = c1.date_input("When are you visiting?", datetime.date.today() + datetime.timedelta(days=1))
     
     weather_data = get_automated_weather(park_keuze, fut_date)
     is_holiday = is_crowd_risk_day(fut_date)
 
     with c2.container():
         wc1, wc2, wc3 = st.columns(3)
-        wc1.metric("Temperatuur", f"{weather_data['temp_c']} °C")
-        wc2.metric("Regenkans", f"{weather_data.get('rain_prob', 0)} %")
-        wc3.metric("Type Dag", "Vakantie" if is_holiday else "Regulier")
+        wc1.metric("Temperature", f"{weather_data['temp_c']} °C")
+        wc2.metric("Rain Probability", f"{weather_data.get('rain_prob', 0)} %")
+        wc3.metric("Day Type", "Holiday" if is_holiday else "Regular")
     
-    with st.expander("🛠️ Ik weet het beter (Handmatig aanpassen)"):
+    with st.expander("🛠️ Manual Override"):
         sim_temp = st.slider("Temp (°C)", -5, 35, int(weather_data['temp_c']))
-        sim_rain_prob = st.slider("Neerslagkans (%)", 0, 100, int(weather_data.get('rain_prob', 0)))
+        sim_rain_prob = st.slider("Precip Chance (%)", 0, 100, int(weather_data.get('rain_prob', 0)))
         sim_rain_mm = 2.0 if sim_rain_prob > 40 else 0.0
     
     final_temp = sim_temp if 'sim_temp' in locals() else weather_data['temp_c']
@@ -708,8 +695,8 @@ with tab_future:
 
     st.divider()
 
-    if st.button("🔮 Voorspel de Drukte", type="primary", use_container_width=True):
-        with st.spinner("AI berekent scenario's..."):
+    if st.button("🔮 Predict Crowds", type="primary", use_container_width=True):
+        with st.spinner("AI calculating scenarios..."):
             top_rides = [r for r, m in all_meta.items() if m.get('score', 0) >= 8 and m.get('type') != 'Restaurant']
             sim_results = []
             hours_range = range(10, 19)
@@ -736,70 +723,149 @@ with tab_future:
                     count += 1
                 
                 avg = total_wait / count if count > 0 else 0
-                sim_results.append({"Attractie": ride, "Gemiddelde Wachttijd": int(avg)})
+                sim_results.append({"Attraction": ride, "Average Wait": int(avg)})
             
-            df_res = pd.DataFrame(sim_results).sort_values("Gemiddelde Wachttijd", ascending=True)
+            df_res = pd.DataFrame(sim_results).sort_values("Average Wait", ascending=True)
             
             if best_start_ride:
-                st.success(f"🚀 **Start-Tip:** Begin je dag bij **{best_start_ride}**! Verwachte wachttijd om 10:00 is slechts **{min_start_wait} min**.")
+                st.success(f"🚀 **Start Tip:** Begin your day at **{best_start_ride}**! Expected wait at 10:00 is only **{min_start_wait} min**.")
 
-            avg_wait = df_res['Gemiddelde Wachttijd'].mean()
-            if avg_wait < 20: crowd_msg = "🟢 **Conclusie:** Rustige dag. Geniet ervan!"
-            elif avg_wait < 45: crowd_msg = "🟠 **Conclusie:** Gemiddelde drukte. Blijf plannen."
-            else: crowd_msg = "🔴 **Conclusie:** Erg druk. Focus op je top 3."
+            avg_wait = df_res['Average Wait'].mean()
+            if avg_wait < 20: crowd_msg = "🟢 **Conclusion:** Quiet day. Enjoy!"
+            elif avg_wait < 45: crowd_msg = "🟠 **Conclusion:** Average crowds. Keep planning."
+            else: crowd_msg = "🔴 **Conclusion:** Busy day. Focus on top 3."
             st.info(crowd_msg)
 
-            st.markdown("### 📊 Verwachte Gemiddelde Wachttijden (Hele Dag)")
+            st.markdown("### 📊 Expected Average Waits (All Day)")
             fig = px.bar(
-                df_res, x="Gemiddelde Wachttijd", y="Attractie", orientation='h', 
-                color="Gemiddelde Wachttijd", color_continuous_scale="RdYlGn_r", text_auto=True 
+                df_res, x="Average Wait", y="Attraction", orientation='h', 
+                color="Average Wait", color_continuous_scale="RdYlGn_r", text_auto=True 
             )
-            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), xaxis_title="Minuten")
+            fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), xaxis_title="Minutes")
             st.plotly_chart(fig, use_container_width=True)
 
-# TAB 5: PERFECTE ROUTE (NIEUW!)
+# TAB 5: PERFECT ROUTE (Fun-Hunter & Completionist)
 with tab_perfect:
-    st.header("🏆 De 'Fun-Hunter' Modus")
-    st.info("Deze modus negeert je lijstje. Hij probeert simpelweg **zoveel mogelijk punten** te scoren binnen de tijd. Grote attracties leveren meer punten op.", icon="ℹ️")
+    st.header("🏆 The 'Fun-Hunter' Modes")
     
+    # 1. Tijd Instellingen
     cp1, cp2 = st.columns(2)
-    cp1.time_input("Starttijd", value=st.session_state.start_time_val, key="perf_start", on_change=update_start_time)
-    cp2.time_input("Eindtijd", value=st.session_state.end_time_val, key="perf_end", on_change=update_end_time)
+    cp1.time_input("Start Time", value=st.session_state.start_time_val, key="perf_start", on_change=update_start_time)
+    cp2.time_input("End Time", value=st.session_state.end_time_val, key="perf_end", on_change=update_end_time)
 
-    if st.button("🚀 Bereken Topscore Route", type="primary"):
-        with st.spinner("AI zoekt de ultieme strategie..."):
-            s_str = st.session_state.start_time_val.strftime("%H:%M")
-            e_str = st.session_state.end_time_val.strftime("%H:%M")
-            
-            route, _, _ = solve_max_score_route(
-                park_name=park_keuze,
-                start_str=s_str,
-                end_str=e_str,
-                start_location=st.session_state.current_loc,
-                pace_factor=pace_factor
-            )
-            
-            if not route:
-                st.error("Kon geen route vinden. Is het park al dicht?")
-            else:
-                st.success("🎯 Strategie gevonden! Zie hieronder.")
-                for i, step in enumerate(route):
-                    label = f"**{step['start_walk']}** | {step['ride']}"
-                    with st.expander(label, expanded=(i==0)):
-                        c1, c2 = st.columns([1,2])
-                        c1.write(f"🚶 Loop: {step['walk_min']} min")
-                        c1.write(f"⏳ Wacht: {step['wait_min']} min")
-                        c2.info(f"{step['note']}")
+    st.markdown("---")
 
-# TAB 6: VOLTOOID (DOORGESCHOVEN)
+    # 2. De Toggle (Keuzemenu)
+    mode_selection = st.radio(
+        "Choose your challenge:",
+        ["💎 High Score Run", "🏁 Challenge: Do All Rides"],
+        horizontal=True,
+        help="High Score focuses on quality/points. Do All Rides tries to empty the checklist."
+    )
+
+    # Dynamische uitleg en knop tekst op basis van keuze
+    if mode_selection == "💎 High Score Run":
+        st.caption("ℹ️ **Strategy:** Ignores your wishlist. Simply tries to gather **max points** (Quality/Time ratio) within the timeframe.")
+        btn_label = "🚀 Calculate Top Score Route"
+    else:
+        st.caption("ℹ️ **Strategy:** Ignores your wishlist. Tries to visit **every single attraction** available in the park.")
+        btn_label = "🌍 Calculate Full Loop"
+
+    # 3. De Actie Knop
+    if st.button(btn_label, type="primary", use_container_width=True):
+        
+        s_str = st.session_state.start_time_val.strftime("%H:%M")
+        e_str = st.session_state.end_time_val.strftime("%H:%M")
+
+        # --- LOGICA VOOR HIGH SCORE ---
+        if mode_selection == "💎 High Score Run":
+            with st.spinner("AI finding winning strategy..."):
+                route, _, _ = solve_max_score_route(
+                    park_name=park_keuze,
+                    start_str=s_str,
+                    end_str=e_str,
+                    start_location=st.session_state.current_loc,
+                    pace_factor=pace_factor
+                )
+                
+                if not route:
+                    st.error("No route found. Park closed or time window too short?")
+                else:
+                    # RIDE COUNTER (De nieuwe feature)
+                    ride_count = len(route)
+                    total_wait = sum(s['wait_min'] for s in route)
+                    
+                    st.success("🎯 Strategy Found!")
+                    
+                    # Metrics tonen
+                    m1, m2 = st.columns(2)
+                    m1.metric("🎢 Rides Scored", ride_count)
+                    m2.metric("⏳ Total Wait", f"{total_wait} min")
+                    
+                    st.markdown("### 📝 The Plan")
+                    for i, step in enumerate(route):
+                        label = f"**{step['start_walk']}** | {step['ride']}"
+                        with st.expander(label, expanded=(i==0)):
+                            c1, c2 = st.columns([1,2])
+                            c1.write(f"🚶 Walk: {step['walk_min']} min")
+                            c1.write(f"⏳ Wait: {step['wait_min']} min")
+                            c2.info(f"{step['note']}")
+
+        # --- LOGICA VOOR COMPLETIONIST (DO ALL) ---
+        else:
+            with st.spinner("Calculating the ultimate loop..."):
+                # 1. Alles ophalen behalve eten
+                all_rides_target = [r for r, m in all_meta.items() if m.get('type') not in ['Restaurant', 'Snack']]
+                # 2. Verwijderen wat al gedaan is
+                remaining_target = [r for r in all_rides_target if r not in st.session_state.completed]
+                
+                if not remaining_target:
+                    st.success("You have already done everything! Go home! 😂")
+                else:
+                    # 3. Solver aanroepen met ALLES als Must-Have
+                    route, closed, skipped = solve_route_with_priorities(
+                        park_name=park_keuze,
+                        must_haves=remaining_target, # Forceer alles
+                        should_haves=[],
+                        start_str=s_str,
+                        end_str=e_str, 
+                        start_location=st.session_state.current_loc,
+                        lunch_config=None,
+                        pace_factor=pace_factor 
+                    )
+                    
+                    if not route and not skipped:
+                        st.error("Time window too short to start.")
+                    else:
+                        st.success(f"🗺️ Loop Calculated!")
+                        
+                        # Metrics
+                        done_count = len(route)
+                        skipped_count = len(skipped)
+                        total_goal = len(remaining_target)
+                        
+                        m1, m2, m3 = st.columns(3)
+                        m1.metric("✅ Possible", f"{done_count}/{total_goal}")
+                        m2.metric("❌ Skipped", skipped_count)
+                        m3.metric("📅 Finish Time", route[-1]['arrival_time'] if route else "-")
+
+                        # Waarschuwing als niet alles past
+                        if skipped:
+                            st.warning(f"⚠️ Not enough time for: {', '.join(skipped)}")
+                        
+                        for i, step in enumerate(route):
+                             with st.expander(f"{i+1}. {step['ride']} (@ {step['start_walk']})"):
+                                st.write(f"Wait: {step['wait_min']}m | Walk: {step['walk_min']}m")
+
+# TAB 6: DONE
 with tab_done:
     if st.session_state.completed:
-        st.success(f"Al {len(st.session_state.completed)} gedaan!")
+        st.success(f"Already finished {len(st.session_state.completed)} rides!")
         cols = st.columns(3)
         for i, r in enumerate(st.session_state.completed):
             cols[i % 3].success(f"✅ {r}")
-        if st.button("🗑️ Reset Alles"):
+        if st.button("🗑️ Reset All"):
             for k in st.session_state.keys(): del st.session_state[k]
             st.rerun()
     else:
-        st.info("Nog niks gedaan.")
+        st.info("Nothing finished yet.")
