@@ -393,6 +393,36 @@ with tab_copilot:
                 c1, c2, c3 = st.columns([2,2,1])
                 reason_msg = get_step_reason(step, prev_loc, park_keuze, live_data)
                 
+                # --- LOGIC FIX: TIME HORIZON CHECK ---
+                try:
+                    # 1. Get Simulation Start Time (from Widget)
+                    sim_start = st.session_state.start_time_val
+                    dummy_date = datetime.date.today()
+                    dt_start = datetime.datetime.combine(dummy_date, sim_start)
+                    
+                    # 2. Get Step Time
+                    h, m = map(int, step['start_walk'].split(':'))
+                    dt_step = datetime.datetime.combine(dummy_date, datetime.time(h, m))
+                    
+                    # 3. Calculate difference in minutes
+                    diff_min = (dt_step - dt_start).total_seconds() / 60
+                    
+                    # 4. Decision: If step is > 30 mins away, FORCE Forecast
+                    if diff_min > 30:
+                        source_label = "Forecast"
+                        source_icon = "🔮"
+                    elif "Live" in step.get('note', ''):
+                        source_label = "Live Data"
+                        source_icon = "📡"
+                    else:
+                        source_label = "Forecast"
+                        source_icon = "🔮"
+                except:
+                    # Fallback if time parsing fails
+                    source_label = "Forecast"
+                    source_icon = "🔮"
+                # -------------------------------------
+
                 if step['type'] == "LUNCH":
                     c1.write(f"🚶 Walk: {step['walk_min']} min")
                     c2.info(f"{reason_msg}\n\n*Duration: {step['note']}*")
@@ -406,9 +436,12 @@ with tab_copilot:
                 else:
                     c1.write(f"🚶 Walk: {step['walk_min']} min")
                     c1.write(f"⏳ Wait: {step['wait_min']} min")
-                    source_label = "Live Data" if "Live" in step['note'] else "Forecast"
+                    
                     prio_label = " | ⭐ Must-Do" if step['type'] == "MUST" else ""
-                    c2.info(f"{reason_msg}\n\n*({source_label}{prio_label})*")
+                    
+                    # Updated info box with corrected source label
+                    c2.info(f"{reason_msg}\n\n*({source_icon} {source_label}{prio_label})*")
+                    
                     c3.button("✅ Done!", key=f"done_{step['ride']}_{i}", on_click=mark_done, args=(step['ride'],))
             prev_loc = step['ride']
 
@@ -669,6 +702,7 @@ with tab_best:
         )
 
 # TAB 4: FUTURE (INTELLIGENT PREP)
+# TAB 4: FUTURE (INTELLIGENT PREP)
 with tab_future:
     st.header("📅 The Ultimate Prep")
     st.caption("The app retrieves live weather forecasts and historical data to simulate your day.")
@@ -737,13 +771,24 @@ with tab_future:
             st.info(crowd_msg)
 
             st.markdown("### 📊 Expected Average Waits (All Day)")
+            
+            # --- COLOR SCALE UPDATE ---
+            # Using the app's native palette: Blue (#4A90E2) to Gold (#FFC107)
             fig = px.bar(
-                df_res, x="Average Wait", y="Attraction", orientation='h', 
-                color="Average Wait", color_continuous_scale="RdYlGn_r", text_auto=True 
+                df_res, 
+                x="Average Wait", 
+                y="Attraction", 
+                orientation='h', 
+                color="Average Wait", 
+                # Custom scale: Low Wait = Blue, High Wait = Gold
+                color_continuous_scale=[(0, "#4A90E2"), (1, "#FFC107")], 
+                range_color=[0, 60], 
+                text_auto=True 
             )
+            # --------------------------
+            
             fig.update_layout(plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)", font=dict(color="white"), xaxis_title="Minutes")
             st.plotly_chart(fig, use_container_width=True)
-
 # TAB 5: PERFECT ROUTE (Fun-Hunter & Completionist)
 with tab_perfect:
     st.header("🏆 The 'Fun-Hunter' Modes")
