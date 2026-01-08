@@ -60,6 +60,28 @@ def prepare_data(df):
     
     return df_train, encoders
 
+def check_model_performance(y_true, y_pred):
+    """
+    Voert extra checks uit om 'false positives' (lage MAE door veel 0-metingen) te voorkomen.
+    """
+    print("\n--- 🔍 Diepte Analyse ---")
+    
+    # Check 1: Prestaties op drukke attracties (> 30 min)
+    # We maken een tijdelijke DataFrame om makkelijk te filteren
+    df_eval = pd.DataFrame({'actual': y_true, 'predicted': y_pred})
+    high_traffic = df_eval[df_eval['actual'] > 30]
+    
+    if len(high_traffic) > 0:
+        mae_high = (high_traffic['actual'] - high_traffic['predicted']).abs().mean()
+        print(f"MAE op drukke momenten (>30m): {mae_high:.2f} minuten")
+        
+        if mae_high > 8:
+            print("⚠️ WAARSCHUWING: Het model presteert matig op drukke dagen. Overweeg meer data van vakanties toe te voegen.")
+        else:
+            print("✅ Het model is betrouwbaar, zelfs bij drukte.")
+    else:
+        print("ℹ️ Geen data met >30 min wachttijd in de testset gevonden.")
+
 def train_model():
     # 1. Data Laden
     print(f"Data laden uit {INPUT_FILE}...")
@@ -68,34 +90,47 @@ def train_model():
     # 2. Voorbereiden
     df_train, encoders = prepare_data(df)
     
-    # Doelvariabele (Wat willen we voorspellen?)
     target = 'posted_wait_time_min'
     features = [col for col in df_train.columns if col != target]
     
     X = df_train[features]
     y = df_train[target]
     
-    # 3. Split in Train (80%) en Test (20%) set
+    # 3. Split
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # 4. Het Model Initialiseren (XGBoost Regressor)
-    print("Start training XGBoost model... (Dit kan even duren)")
+    # --- NIEUW: WEGING BEREKENEN ---
+    # We vertellen het model: "Let 3x beter op bij rijen > 30 min, en 5x beter bij > 60 min"
+    print("Wegingsfactoren berekenen voor betere piek-voorspellingen...")
+    
+    weights = y_train.apply(lambda x: 
+        1.0 if x <= 15 else      # Rustig: Standaard belang
+        2.0 if x <= 40 else      # Gemiddeld: Dubbel belang
+        4.0                      # Druk: Vierdubbel belang!
+    )
+    # -------------------------------
+
+    # 4. Model Initialiseren (Iets zwaarder ingesteld)
+    print("Start training XGBoost model met sample weights...")
     model = xgb.XGBRegressor(
-        n_estimators=500,    # Aantal 'beslisbomen'
-        learning_rate=0.05,  # Hoe snel hij leert
-        max_depth=6,         # Hoe complex de bomen mogen zijn
-        n_jobs=-1            # Gebruik alle processor cores
+        n_estimators=600,      # Iets meer bomen
+        learning_rate=0.04,    # Iets langzamer leren voor precisie
+        max_depth=7,           # Iets dieper kijken
+        n_jobs=-1
     )
     
-    # 5. Trainen!
-    model.fit(X_train, y_train)
+    # 5. Trainen MET gewichten
+    # Hier geven we de 'sample_weight' mee
+    model.fit(X_train, y_train, sample_weight=weights)
     
     # 6. Evalueren
     predictions = model.predict(X_test)
     mae = mean_absolute_error(y_test, predictions)
     print(f"\n--- Resultaten ---")
     print(f"Gemiddelde afwijking (MAE): {mae:.2f} minuten")
-    print("Dat betekent: gemiddeld zit het model er zoveel minuten naast.")
+    
+    # Check de diepte analyse opnieuw
+    check_model_performance(y_test, predictions)
     
     # 7. Opslaan
     full_pipeline = {
