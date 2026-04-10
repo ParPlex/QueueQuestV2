@@ -12,18 +12,18 @@ OUTPUT_FILE = 'real_data.csv'
 REGION = os.environ.get('AWS_REGION', 'eu-north-1') 
 
 def fetch_and_process_real_data():
-    """Haalt alle data op uit DynamoDB, converteert Decimals en slaat op als CSV."""
+    """Haalt alle data op uit DynamoDB, converteert Decimals, filtert gesloten dagen en slaat op als CSV."""
     
     try:
         # Boto3 zoekt hier naar de credentials die je met 'aws configure' hebt ingesteld
         dynamodb = boto3.resource('dynamodb', region_name=REGION)
         table = dynamodb.Table(TABLE_NAME)
     except Exception as e:
-        print(f"❌ FOUT: Kan niet verbinden met AWS. Is de REGION '{REGION}' juist?")
+        print(f"FOUT: Kan niet verbinden met AWS. Is de REGION '{REGION}' juist?")
         print(f"Details: {e}")
         sys.exit(1)
 
-    print(f"⏳ Verbinding met tabel '{TABLE_NAME}' in '{REGION}'...")
+    print(f"Verbinding met tabel '{TABLE_NAME}' in '{REGION}'...")
     print("   Data aan het downloaden (Scan met paginatie)...")
     
     # Gebruik Scan om alle items op te halen
@@ -38,14 +38,14 @@ def fetch_and_process_real_data():
             data.extend(response['Items'])
             
     except Exception as e:
-        print(f"❌ FOUT: Fout bij het scannen van de tabel. Check IAM rechten.")
+        print(f"FOUT: Fout bij het scannen van de tabel. Check IAM rechten.")
         print(f"Details: {e}")
         sys.exit(1)
         
-    print(f"✅ Download compleet! {len(data)} records gevonden.")
+    print(f"Download compleet! {len(data)} records gevonden.")
 
     if len(data) == 0:
-        print("⚠️ De tabel is leeg. Er valt nog niets op te slaan.")
+        print("De tabel is leeg. Er valt nog niets op te slaan.")
         return
 
     # 1. Conversie van DynamoDB Decimal naar Python float/int
@@ -63,7 +63,7 @@ def fetch_and_process_real_data():
         clean_item['timestamp'] = clean_item.get('SK') 
         clean_data.append(clean_item)
         
-    # 2. Opslaan als Pandas DataFrame (Hier zat de fout)
+    # 2. Opslaan als Pandas DataFrame
     df = pd.DataFrame(clean_data)
     
     # Filteren op de kolommen die het AI-model verwacht
@@ -76,20 +76,35 @@ def fetch_and_process_real_data():
     existing_cols = [c for c in cols_to_keep if c in df.columns]
     
     if not existing_cols:
-        print("❌ FOUT: De opgehaalde data bevat niet de juiste kolommen.")
+        print("FOUT: De opgehaalde data bevat niet de juiste kolommen.")
         print(f"Gevonden kolommen: {df.columns}")
         return
 
     df = df[existing_cols]
+
+    # 3. FILTER LOGICA: Verwijder dagen waarop het park gesloten was
+    print("Data aan het opschonen (gesloten dagen verwijderen)...")
+    
+    # Zet timestamp om naar een werkbaar datetime-formaat en extraheer de datum
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df['date'] = df['timestamp'].dt.date
+    
+    # Bereken de maximale wachttijd per park per dag
+    daily_max = df.groupby(['park_name', 'date'])['posted_wait_time_min'].transform('max')
+    
+    # Behoud alleen de rijen van dagen waarop de maximale wachttijd groter is dan 0
+    df = df[daily_max > 0].copy()
+    
+    # Verwijder de tijdelijke 'date' kolom om de output netjes te houden
+    df = df.drop(columns=['date'])
 
     # Sorteren op tijd
     if 'timestamp' in df.columns:
         df = df.sort_values(by='timestamp').reset_index(drop=True)
     
     df.to_csv(OUTPUT_FILE, index=False)
-    print(f"🎉 Succes! Data opgeslagen in '{OUTPUT_FILE}' ({len(df)} rijen).")
+    print(f"Succes! Data opgeslagen in '{OUTPUT_FILE}' ({len(df)} geldige rijen).")
     print("Je kunt nu 'train_model.py' draaien met INPUT_FILE = 'real_data.csv'")
-
 
 if __name__ == "__main__":
     fetch_and_process_real_data()
