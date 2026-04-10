@@ -5,7 +5,7 @@ import plotly.express as px
 import numpy as np
 import importlib
 import pytz 
-
+#force restart cloud
 # Force reload of route_solver on every interaction
 import route_solver
 importlib.reload(route_solver)
